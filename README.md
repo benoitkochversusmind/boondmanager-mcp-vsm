@@ -152,6 +152,8 @@ boondmanager-mcp-server/
 │       ├── payments.ts       # Outils paiements
 │       ├── advantages.ts     # Outils avantages
 │       └── application.ts    # Outils application (dictionnaires)
+├── scripts/
+│   └── scan-boond-api.mjs   # Détection automatique de nouveaux endpoints
 ├── dist/                     # Build JavaScript
 ├── .github/                  # CI/CD, templates, Dependabot
 ├── package.json
@@ -160,6 +162,26 @@ boondmanager-mcp-server/
 ├── eslint.config.js
 └── README.md
 ```
+
+## 🤖 Détection automatique de nouveaux endpoints
+
+Un workflow GitHub Actions (`check-boond-api.yml`) vérifie chaque semaine si BoondManager a ajouté de nouvelles ressources API. S'il détecte de nouveaux endpoints ou onglets :
+
+1. **Scan** : Le script `scripts/scan-boond-api.mjs` probe l'API BoondManager et compare avec l'implémentation actuelle
+2. **Implémentation** : Claude Code génère automatiquement le code (tools, schemas, tests) en suivant les patterns existants
+3. **Pull Request** : Une PR est créée avec les changements pour revue humaine
+
+### Configuration requise
+
+Ajouter ces secrets dans GitHub Settings > Secrets :
+
+| Secret | Description |
+|--------|-------------|
+| `ANTHROPIC_API_KEY` | Clé API Anthropic pour Claude Code Action |
+| `BOOND_USER` | Login BoondManager (BasicAuth) |
+| `BOOND_PASSWORD` | Mot de passe BoondManager (BasicAuth) |
+
+Le workflow peut aussi être déclenché manuellement via l'onglet Actions > "Check BoondManager API Updates" > Run workflow.
 
 ## 🔒 Sécurité
 

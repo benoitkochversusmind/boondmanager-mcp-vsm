@@ -1,0 +1,85 @@
+name: Check BoondManager API Updates
+
+on:
+  schedule:
+    # Every Monday at 8:00 UTC
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force check even if no changes detected"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-api:
+    name: Detect new BoondManager API resources
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Scan BoondManager API for new endpoints
+        id: scan
+        run: node scripts/scan-boond-api.mjs
+        env:
+          BOOND_USER: ${{ secrets.BOOND_USER }}
+          BOOND_PASSWORD: ${{ secrets.BOOND_PASSWORD }}
+          BOOND_API_TOKEN: ${{ secrets.BOOND_API_TOKEN }}
+          BOOND_BASE_URL: ${{ secrets.BOOND_BASE_URL }}
+
+      - name: Create implementation with Claude
+        if: steps.scan.outputs.has_changes == 'true' || github.event.inputs.force == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            You are maintaining the boondmanager-mcp-server project, an MCP server for the BoondManager API.
+
+            The scan script has detected changes in the BoondManager API. Here is the scan report:
+
+            ${{ steps.scan.outputs.report }}
+
+            Your task:
+            1. Read the existing codebase to understand the patterns (especially src/tools/, src/schemas/index.ts, src/constants.ts, src/tools/index.ts, src/index.ts)
+            2. For each NEW endpoint detected:
+               - Add the API path to src/constants.ts API_PATHS
+               - Create a Zod schema in src/schemas/index.ts following existing patterns
+               - Create a new tool file in src/tools/ following the patterns of existing tools (use crud-factory for standard CRUD, custom implementation for special cases)
+               - Create a test file in src/tools/*.test.ts matching the pattern of existing tests
+               - Export the register function from src/tools/index.ts
+               - Register the tools in src/index.ts
+            3. For each NEW tab detected on existing endpoints:
+               - Add the tab to ENTITY_TABS in src/constants.ts
+               - Add the tab tool registration in the corresponding src/tools/*.ts file
+               - Update the corresponding test file
+            4. Update the README.md:
+               - Update the tools count
+               - Add new domains to the table
+               - Update the architecture section if new files were added
+            5. Run these commands to verify your changes:
+               - npm run build
+               - npm test
+               - npm run lint
+            6. Create a new branch and commit all changes
+            7. Create a pull request with a clear description of what was added
+
+            IMPORTANT: Follow the EXACT same patterns as existing code. Use French descriptions in tool metadata. Keep the same JSON:API body building pattern with buildJsonApiBody.
+          claude_args: "--model claude-sonnet-4-20250514"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

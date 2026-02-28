@@ -1,6 +1,6 @@
 {
   "name": "boondmanager-mcp-server",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "MCP Server for BoondManager API - Resources, Candidates & CRM",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -45,6 +45,7 @@
     "candidates",
     "resources"
   ],
+  "mcpName": "io.github.fauguste/boondmanager-mcp-server",
   "author": "Silamir",
   "license": "MIT",
   "dependencies": {

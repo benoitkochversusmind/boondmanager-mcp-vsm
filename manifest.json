@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "boondmanager-mcp-server",
   "display_name": "BoondManager MCP Server",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "description": "MCP Server for BoondManager API - 158 tools across 36 domains for ERP/CRM data",
   "author": {
     "name": "Silamir",
@@ -28,7 +28,10 @@
         "BOOND_BASE_URL": "${user_config.base_url}",
         "BOOND_USER_TOKEN": "${user_config.user_token}",
         "BOOND_CLIENT_TOKEN": "${user_config.client_token}",
-        "BOOND_CLIENT_KEY": "${user_config.client_key}"
+        "BOOND_CLIENT_KEY": "${user_config.client_key}",
+        "BOOND_API_TOKEN": "${user_config.api_token}",
+        "BOOND_USER": "${user_config.user}",
+        "BOOND_PASSWORD": "${user_config.password}"
       }
     }
   },
@@ -42,24 +45,44 @@
     },
     "user_token": {
       "type": "string",
-      "title": "User Token",
-      "description": "Token utilisateur BoondManager. Pour l'obtenir : connectez-vous à BoondManager > Menu utilisateur (en haut à droite) > Mon compte > onglet « Informations de connexion » > section « Clé d'API ».",
+      "title": "User Token (Option 1 : JWT auto)",
+      "description": "Token utilisateur BoondManager. Mon compte > Informations de connexion > Clé d'API. Remplir avec Client Token et Client Key pour générer le JWT automatiquement.",
       "sensitive": true,
-      "required": true
+      "required": false
     },
     "client_token": {
       "type": "string",
-      "title": "Client Token",
-      "description": "Token client BoondManager. Disponible dans Administration > Espace Développeur > API / Sandbox.",
+      "title": "Client Token (Option 1 : JWT auto)",
+      "description": "Token client BoondManager. Administration > Espace Développeur > API / Sandbox.",
       "sensitive": true,
-      "required": true
+      "required": false
     },
     "client_key": {
       "type": "string",
-      "title": "Client Key (secret)",
-      "description": "Clé secrète client BoondManager. Disponible dans Administration > Espace Développeur > API / Sandbox.",
+      "title": "Client Key (Option 1 : JWT auto)",
+      "description": "Clé secrète client BoondManager. Administration > Espace Développeur > API / Sandbox.",
       "sensitive": true,
-      "required": true
+      "required": false
+    },
+    "api_token": {
+      "type": "string",
+      "title": "Token JWT (Option 2 : JWT pré-construit)",
+      "description": "Token JWT BoondManager déjà construit. Alternatif à l'option 1.",
+      "sensitive": true,
+      "required": false
+    },
+    "user": {
+      "type": "string",
+      "title": "Utilisateur (Option 3 : BasicAuth)",
+      "description": "Nom d'utilisateur BoondManager pour l'authentification BasicAuth.",
+      "required": false
+    },
+    "password": {
+      "type": "string",
+      "title": "Mot de passe (Option 3 : BasicAuth)",
+      "description": "Mot de passe BoondManager pour l'authentification BasicAuth.",
+      "sensitive": true,
+      "required": false
     }
   },
   "tools_generated": true,

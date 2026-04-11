@@ -18,19 +18,26 @@ export function buildJwt(userToken: string, clientToken: string, clientKey: stri
   return `${header}.${payload}.${signature}`;
 }
 
+/** Return the env value if it is a real user-supplied value, or undefined otherwise. */
+function envOrUndefined(key: string): string | undefined {
+  const v = process.env[key];
+  if (!v || v.startsWith("${")) return undefined;
+  return v;
+}
+
 export function initClient(): void {
-  const baseUrl = process.env.BOOND_BASE_URL || DEFAULT_BASE_URL;
+  const baseUrl = envOrUndefined("BOOND_BASE_URL") || DEFAULT_BASE_URL;
 
   // Auth priority:
   // 1. Build JWT from components (userToken + clientToken + clientKey)
   // 2. Pre-built JWT token
   // 3. BasicAuth (user:password)
-  const userToken = process.env.BOOND_USER_TOKEN;
-  const clientToken = process.env.BOOND_CLIENT_TOKEN;
-  const clientKey = process.env.BOOND_CLIENT_KEY;
-  const token = process.env.BOOND_API_TOKEN;
-  const user = process.env.BOOND_USER;
-  const password = process.env.BOOND_PASSWORD;
+  const userToken = envOrUndefined("BOOND_USER_TOKEN");
+  const clientToken = envOrUndefined("BOOND_CLIENT_TOKEN");
+  const clientKey = envOrUndefined("BOOND_CLIENT_KEY");
+  const token = envOrUndefined("BOOND_API_TOKEN");
+  const user = envOrUndefined("BOOND_USER");
+  const password = envOrUndefined("BOOND_PASSWORD");
 
   let authHeader: string;
 

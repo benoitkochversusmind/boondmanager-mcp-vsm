@@ -237,6 +237,23 @@ describe("initClient", () => {
     process.env.BOOND_CLIENT_KEY = "client-key";
     expect(() => initClient()).not.toThrow();
   });
+
+  it("should ignore unresolved template variables and fall back to BasicAuth", () => {
+    process.env.BOOND_USER_TOKEN = "${user_config.user_token}";
+    process.env.BOOND_CLIENT_TOKEN = "${user_config.client_token}";
+    process.env.BOOND_CLIENT_KEY = "${user_config.client_key}";
+    process.env.BOOND_API_TOKEN = "${user_config.api_token}";
+    process.env.BOOND_USER = "user";
+    process.env.BOOND_PASSWORD = "pass";
+    expect(() => initClient()).not.toThrow();
+  });
+
+  it("should throw when all values are unresolved templates", () => {
+    process.env.BOOND_USER_TOKEN = "${user_config.user_token}";
+    process.env.BOOND_API_TOKEN = "${user_config.api_token}";
+    process.env.BOOND_USER = "${user_config.user}";
+    expect(() => initClient()).toThrow("Authentication required");
+  });
 });
 
 describe("buildJwt", () => {

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "boondmanager-mcp-server",
   "display_name": "BoondManager MCP Server",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "description": "MCP Server for BoondManager API - 158 tools across 36 domains for ERP/CRM data",
   "author": {
     "name": "Silamir",

@@ -245,6 +245,25 @@ npm install
 npm run build
 ```
 
+### LobeChat / LobeHub
+
+Le serveur est listé sur le [marketplace MCP de LobeHub](https://lobehub.com/mcp/fauguste-boondmanager-mcp-server). Dans LobeChat (auto-hebergé ou cloud), ajouter le MCP via **Reglages > Plugins > MCP > Ajouter** avec :
+
+```json
+{
+  "name": "boondmanager",
+  "command": "npx",
+  "args": ["-y", "boondmanager-mcp-server"],
+  "env": {
+    "BOOND_USER_TOKEN": "<votre_user_token>",
+    "BOOND_CLIENT_TOKEN": "<votre_client_token>",
+    "BOOND_CLIENT_KEY": "<votre_client_key>"
+  }
+}
+```
+
+Ou utiliser le transport HTTP (voir section [Transports](#transports)) pour un deploiement partage en mode gateway.
+
 ## Configuration
 
 ### Authentification

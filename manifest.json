@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "boondmanager-mcp-server",
   "display_name": "BoondManager MCP Server",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "description": "MCP Server for BoondManager API - 158 tools across 36 domains for ERP/CRM data",
   "author": {
     "name": "Frédéric Auguste",
@@ -15,9 +15,7 @@
   "homepage": "https://github.com/fauguste/boondmanager-mcp-server#readme",
   "support": "https://github.com/fauguste/boondmanager-mcp-server/issues",
   "license": "Apache-2.0",
-  "icons": [
-    { "src": "icon.png", "size": "128x128" }
-  ],
+  "icons": [{ "src": "icon.png", "size": "128x128" }],
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",

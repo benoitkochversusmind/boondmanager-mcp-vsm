@@ -1,6 +1,6 @@
 {
   "name": "boondmanager-mcp-server",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "description": "MCP Server for BoondManager API - Resources, Candidates & CRM",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

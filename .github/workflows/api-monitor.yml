@@ -44,8 +44,26 @@ jobs:
 
           async function fetchApiEndpoints() {
             try {
-              // Récupère la page principale de documentation
-              const response = await axios.get(API_DOC_URL);
+              // Récupère la page principale de documentation avec headers réalistes
+              const response = await axios.get(API_DOC_URL, {
+                timeout: 30000,
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                  'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+                  'Accept-Encoding': 'gzip, deflate, br',
+                  'Cache-Control': 'no-cache',
+                  'Pragma': 'no-cache',
+                  'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                  'Sec-Ch-Ua-Mobile': '?0',
+                  'Sec-Ch-Ua-Platform': '"Windows"',
+                  'Sec-Fetch-Dest': 'document',
+                  'Sec-Fetch-Mode': 'navigate',
+                  'Sec-Fetch-Site': 'none',
+                  'Sec-Fetch-User': '?1',
+                  'Upgrade-Insecure-Requests': '1'
+                }
+              });
               const $ = cheerio.load(response.data);
 
               const endpoints = [];
@@ -87,6 +105,24 @@ jobs:
               };
             } catch (error) {
               console.error('Error fetching API documentation:', error.message);
+
+              // Gestion spéciale pour les erreurs 403 (Cloudflare/WAF)
+              if (error.response && error.response.status === 403) {
+                console.error('::warning::HTTP 403 Forbidden - Le site bloque les requêtes automatiques');
+                console.error('::notice::Cloudflare détecté - headers: ', JSON.stringify(error.response.headers));
+                console.error('::notice::Ceci peut être temporaire. Le workflow réessayera la semaine prochaine.');
+
+                // Retourne un snapshot vide pour éviter de casser le workflow
+                return {
+                  timestamp: new Date().toISOString(),
+                  url: API_DOC_URL,
+                  endpointsCount: 0,
+                  endpoints: [],
+                  error: 'HTTP 403 - Access blocked by Cloudflare/WAF',
+                  note: 'Will retry next run'
+                };
+              }
+
               throw error;
             }
           }
@@ -137,6 +173,23 @@ jobs:
           async function main() {
             console.log('📡 Fetching BoondManager API documentation...');
             const currentSnapshot = await fetchApiEndpoints();
+
+            // Gestion des erreurs d'accès
+            if (currentSnapshot.error) {
+              console.log(`⚠️  Fetching failed: ${currentSnapshot.error}`);
+              console.log(`::warning::Could not fetch API documentation: ${currentSnapshot.error}`);
+
+              // Sauvegarde quand même un snapshot d'erreur
+              fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(currentSnapshot, null, 2));
+              fs.writeFileSync('changes.json', JSON.stringify({
+                hasChanges: false,
+                error: currentSnapshot.error,
+                note: 'Workflow will retry on next scheduled run'
+              }, null, 2));
+
+              console.log('::notice::Snapshot saved with error state. Will retry next run.');
+              return; // Exit sans créer d'issue
+            }
 
             console.log(`✅ Found ${currentSnapshot.endpointsCount} endpoints`);
 

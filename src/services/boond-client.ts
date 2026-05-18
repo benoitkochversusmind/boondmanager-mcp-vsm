@@ -11,6 +11,7 @@ import {
 } from "../constants.js";
 import type { BoondConfig, JsonApiResponse, SearchParams } from "../types.js";
 import { TokenBucket } from "./rate-limiter.js";
+import { requestContext } from "../auth/context.js";
 
 let config: BoondConfig | null = null;
 
@@ -76,6 +77,17 @@ export function initClient(): void {
 }
 
 function getConfig(): BoondConfig {
+  // Mode multi-utilisateur (HTTP + OAuth Entra ID) :
+  // le JWT Boondmanager est injecté par requête via AsyncLocalStorage
+  const ctx = requestContext.getStore();
+  if (ctx?.boondJwt) {
+    return {
+      baseUrl: envOrUndefined("BOOND_BASE_URL") || DEFAULT_BASE_URL,
+      authHeaderName: JWT_HEADER_NAME,
+      authHeaderValue: ctx.boondJwt,
+    };
+  }
+  // Fallback : mode stdio / développement local (credentials via env vars)
   if (!config) {
     initClient();
   }

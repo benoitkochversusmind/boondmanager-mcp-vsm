@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { requestContext } from "./auth/context.js";
 import { validateEntraToken } from "./auth/entra.js";
@@ -62,7 +62,7 @@ declare global {
   }
 }
 
-function registerAllTools(server: Server): void {
+function registerAllTools(server: McpServer): void {
   registerCandidateTools(server);
   registerResourceTools(server);
   registerContactTools(server);
@@ -162,10 +162,10 @@ app.get("/sse", authMiddleware, async (req, res) => {
     console.log("[SSE] Disconnected: " + userEmail);
   });
 
-  const mcpServer = new Server(
-    { name: "boondmanager-vsm", version: "1.0.0" },
-    { capabilities: { tools: {}, resources: {}, prompts: {} } }
-  );
+  const mcpServer = new McpServer({
+    name: "boondmanager-vsm",
+    version: "1.0.0",
+  });
 
   registerAllTools(mcpServer);
 

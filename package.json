@@ -20,12 +20,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fauguste/boondmanager-mcp-server.git"
+    "url": "git+https://github.com/benoitkochversusmind/boondmanager-mcp-vsm.git"
   },
   "bugs": {
-    "url": "https://github.com/fauguste/boondmanager-mcp-server/issues"
+    "url": "https://github.com/benoitkochversusmind/boondmanager-mcp-vsm/issues"
   },
-  "homepage": "https://github.com/fauguste/boondmanager-mcp-server#readme",
+  "homepage": "https://github.com/benoitkochversusmind/boondmanager-mcp-vsm#readme",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -38,10 +38,6 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "docs:tools": "npm run build && node scripts/generate-tools-catalog.mjs",
-    "docs:tools:check": "npm run build && node scripts/generate-tools-catalog.mjs --check",
-    "api:monitor:test": "node scripts/test-api-monitor.cjs",
-    "api:monitor:save": "node scripts/test-api-monitor.cjs --save",
     "prepare": "husky",
     "prepublishOnly": "npm run build"
   },
@@ -50,19 +46,26 @@
     "boondmanager",
     "esn",
     "crm",
-    "candidates",
-    "resources"
+    "versusmind"
   ],
-  "mcpName": "io.github.fauguste/boondmanager-mcp-server",
-  "author": "Frédéric Auguste",
+  "author": "Versusmind",
   "license": "Apache-2.0",
   "dependencies": {
+    "@azure/identity": "^4.4.0",
+    "@azure/keyvault-secrets": "^4.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.0",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.1.0",
     "pino": "^10.3.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^25.3.0",
     "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^10.0.2",

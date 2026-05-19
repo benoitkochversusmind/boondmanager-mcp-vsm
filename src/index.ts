@@ -102,6 +102,44 @@ function registerAllTools(server: McpServer): void {
   registerWorkflowTools(server);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// JWT PRE-CACHE
+// Fetched once at startup so the first SSE request never blocks on Key Vault.
+// Errors here are non-fatal: the first SSE request will retry with a timeout.
+// ─────────────────────────────────────────────────────────────────────────────
+const _defaultUser = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
+let _cachedBoondJwt: string = "";
+
+(async () => {
+  try {
+    _cachedBoondJwt = await getBoondJwtForUser(_defaultUser);
+    console.log("[INIT] Boond JWT pre-cached for:", _defaultUser);
+  } catch (err) {
+    console.warn("[INIT] Boond JWT pre-cache failed (will retry on first request):", err);
+  }
+})();
+
+async function getBoondJwtCached(userEmail: string): Promise<string> {
+  if (_cachedBoondJwt) return _cachedBoondJwt;
+  _cachedBoondJwt = await getBoondJwtForUser(userEmail);
+  return _cachedBoondJwt;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SESSION STORE
+// Keeps transport + credentials together so /messages never needs to
+// re-authenticate: the session inherits the identity established at /sse.
+// ─────────────────────────────────────────────────────────────────────────────
+interface SessionData {
+  transport: SSEServerTransport;
+  userEmail: string;
+  boondJwt: string;
+}
+const activeSessions = new Map<string, SessionData>();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH MIDDLEWARE (kept for future routes that require Entra auth)
+// ─────────────────────────────────────────────────────────────────────────────
 async function authMiddleware(
   req: express.Request,
   res: express.Response,
@@ -112,38 +150,40 @@ async function authMiddleware(
     const token = raw.startsWith("Bearer ") ? raw.slice(7) : null;
     if (!token) throw new Error("Authorization header missing");
 
-    // Mode 1 : API key statique (pour Claude.ai remote MCP)
     const apiKey = process.env.MCP_API_KEY;
     if (apiKey && token === apiKey) {
-      const userEmail = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
+      const userEmail = _defaultUser;
       req.userEmail = userEmail;
-      req.boondJwt = await getBoondJwtForUser(userEmail);
-      console.log("[AUTH] API key accepted for: " + userEmail);
+      req.boondJwt = await getBoondJwtCached(userEmail);
+      console.log("[AUTH] API key accepted for:", userEmail);
       next();
       return;
     }
 
-    // Mode 2 : Token Microsoft Entra ID
     const userEmail = await validateEntraToken(token);
     const boondJwt = await getBoondJwtForUser(userEmail);
     req.userEmail = userEmail;
     req.boondJwt = boondJwt;
-    console.log("[AUTH] Connected: " + userEmail);
+    console.log("[AUTH] Connected:", userEmail);
     next();
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn("[AUTH] Refused: " + message);
+    console.warn("[AUTH] Refused:", message);
     res.setHeader("WWW-Authenticate", "Bearer realm=\"Boondmanager MCP\"");
     res.status(401).json({ error: "Unauthorized", detail: message });
   }
 }
 
 const app = express();
-app.use(cors({ origin: "https://claude.ai", methods: ["GET", "POST", "OPTIONS"] }));
+app.use(cors({ origin: "*", methods: ["GET", "POST", "OPTIONS"] }));
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", version: "1.0.0-vsm" });
+  res.json({
+    status: "ok",
+    version: "1.0.0-vsm",
+    jwtReady: !!_cachedBoondJwt,
+  });
 });
 
 app.get("/.well-known/oauth-authorization-server", (_req, res) => {
@@ -162,28 +202,44 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   });
 });
 
-const activeTransports = new Map<string, SSEServerTransport>();
-
+// ─────────────────────────────────────────────────────────────────────────────
+// SSE ENDPOINT
+// Fix: JWT is fetched from cache (pre-loaded at startup) so the transport is
+// created immediately. If cache is empty, we wait at most 10 s before returning
+// 503 — never hanging indefinitely.
+// ─────────────────────────────────────────────────────────────────────────────
 app.get("/sse", async (req, res) => {
-  const userEmail = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
-  const boondJwt = await getBoondJwtForUser(userEmail);
-  req.userEmail = userEmail;
-  req.boondJwt = boondJwt;
-  
+  const userEmail = _defaultUser;
+
+  let boondJwt = _cachedBoondJwt;
+  if (!boondJwt) {
+    try {
+      boondJwt = await Promise.race([
+        getBoondJwtCached(userEmail),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("JWT fetch timeout after 10 s")), 10_000)
+        ),
+      ]);
+    } catch (err) {
+      console.error("[SSE] JWT unavailable:", err);
+      res.status(503).json({ error: "Boondmanager credentials unavailable, retry shortly" });
+      return;
+    }
+  }
 
   const transport = new SSEServerTransport("/messages", res);
-  activeTransports.set(transport.sessionId, transport);
+  activeSessions.set(transport.sessionId, { transport, userEmail, boondJwt });
+  console.log("[SSE] New session:", transport.sessionId, "for", userEmail);
 
   res.on("close", () => {
-    activeTransports.delete(transport.sessionId);
-    console.log("[SSE] Disconnected: " + userEmail);
+    activeSessions.delete(transport.sessionId);
+    console.log("[SSE] Disconnected:", transport.sessionId);
   });
 
   const mcpServer = new McpServer({
     name: "boondmanager-vsm",
     version: "1.0.0",
   });
-
   registerAllTools(mcpServer);
 
   await requestContext.run({ userEmail, boondJwt }, async () => {
@@ -191,24 +247,26 @@ app.get("/sse", async (req, res) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MESSAGES ENDPOINT
+// Fix: reuses the JWT stored in the session established at /sse.
+// No re-authentication needed — Claude.ai does not send Bearer tokens here.
+// ─────────────────────────────────────────────────────────────────────────────
 app.post("/messages", async (req, res) => {
   const sessionId = req.query.sessionId as string;
-  const transport = activeTransports.get(sessionId);
-  if (!transport) {
+  const session = activeSessions.get(sessionId);
+  if (!session) {
     return res.status(404).json({ error: "Unknown session: " + sessionId });
   }
+  const { transport, userEmail, boondJwt } = session;
   try {
-    const raw = req.headers.authorization ?? "";
-    const token = raw.startsWith("Bearer ") ? raw.slice(7) : null;
-    if (!token) return res.status(401).json({ error: "Authorization missing" });
-    const userEmail = await validateEntraToken(token);
-    const boondJwt = await getBoondJwtForUser(userEmail);
     await requestContext.run({ userEmail, boondJwt }, async () => {
       await transport.handlePostMessage(req, res);
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(401).json({ error: "Unauthorized", detail: message });
+    console.error("[MESSAGES] Error:", message);
+    res.status(500).json({ error: message });
   }
 });
 

@@ -1,9 +1,8 @@
 import express from "express";
 import cors from "cors";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { requestContext } from "./auth/context.js";
-import { validateEntraToken } from "./auth/entra.js";
 import { getBoondJwtForUser } from "./auth/keyvault.js";
 import { registerCandidateTools } from "./tools/candidates.js";
 import { registerResourceTools } from "./tools/resources.js";
@@ -52,14 +51,25 @@ REQUIRED_ENV.forEach((k) => {
 });
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
+const _defaultUser = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
+let _cachedBoondJwt: string = "";
 
-declare global {
-  namespace Express {
-    interface Request {
-      userEmail?: string;
-      boondJwt?: string;
-    }
+// ─────────────────────────────────────────────────────────────────────────────
+// JWT PRE-CACHE — fetched once at startup via system-assigned managed identity
+// ─────────────────────────────────────────────────────────────────────────────
+(async () => {
+  try {
+    _cachedBoondJwt = await getBoondJwtForUser(_defaultUser);
+    console.log("[INIT] Boond JWT pre-cached for:", _defaultUser);
+  } catch (err) {
+    console.warn("[INIT] Boond JWT pre-cache failed (will retry on first request):", err);
   }
+})();
+
+async function getBoondJwtCached(userEmail: string): Promise<string> {
+  if (_cachedBoondJwt) return _cachedBoondJwt;
+  _cachedBoondJwt = await getBoondJwtForUser(userEmail);
+  return _cachedBoondJwt;
 }
 
 function registerAllTools(server: McpServer): void {
@@ -103,112 +113,10 @@ function registerAllTools(server: McpServer): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// JWT PRE-CACHE
-// Fetched once at startup so the first SSE request never blocks on Key Vault.
-// Errors here are non-fatal: the first SSE request will retry with a timeout.
+// MCP HANDLER — Streamable HTTP, stateless
+// Claude.ai sends POST requests; each is a fully independent JSON-RPC exchange.
 // ─────────────────────────────────────────────────────────────────────────────
-const _defaultUser = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
-let _cachedBoondJwt: string = "";
-
-(async () => {
-  try {
-    _cachedBoondJwt = await getBoondJwtForUser(_defaultUser);
-    console.log("[INIT] Boond JWT pre-cached for:", _defaultUser);
-  } catch (err) {
-    console.warn("[INIT] Boond JWT pre-cache failed (will retry on first request):", err);
-  }
-})();
-
-async function getBoondJwtCached(userEmail: string): Promise<string> {
-  if (_cachedBoondJwt) return _cachedBoondJwt;
-  _cachedBoondJwt = await getBoondJwtForUser(userEmail);
-  return _cachedBoondJwt;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SESSION STORE
-// Keeps transport + credentials together so /messages never needs to
-// re-authenticate: the session inherits the identity established at /sse.
-// ─────────────────────────────────────────────────────────────────────────────
-interface SessionData {
-  transport: SSEServerTransport;
-  userEmail: string;
-  boondJwt: string;
-}
-const activeSessions = new Map<string, SessionData>();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AUTH MIDDLEWARE (kept for future routes that require Entra auth)
-// ─────────────────────────────────────────────────────────────────────────────
-async function authMiddleware(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-): Promise<void> {
-  try {
-    const raw = req.headers.authorization ?? "";
-    const token = raw.startsWith("Bearer ") ? raw.slice(7) : null;
-    if (!token) throw new Error("Authorization header missing");
-
-    const apiKey = process.env.MCP_API_KEY;
-    if (apiKey && token === apiKey) {
-      const userEmail = _defaultUser;
-      req.userEmail = userEmail;
-      req.boondJwt = await getBoondJwtCached(userEmail);
-      console.log("[AUTH] API key accepted for:", userEmail);
-      next();
-      return;
-    }
-
-    const userEmail = await validateEntraToken(token);
-    const boondJwt = await getBoondJwtForUser(userEmail);
-    req.userEmail = userEmail;
-    req.boondJwt = boondJwt;
-    console.log("[AUTH] Connected:", userEmail);
-    next();
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn("[AUTH] Refused:", message);
-    res.setHeader("WWW-Authenticate", "Bearer realm=\"Boondmanager MCP\"");
-    res.status(401).json({ error: "Unauthorized", detail: message });
-  }
-}
-
-const app = express();
-app.use(cors({ origin: "*", methods: ["GET", "POST", "OPTIONS"] }));
-app.use(express.json());
-
-app.get("/health", (_req, res) => {
-  res.json({
-    status: "ok",
-    version: "1.0.0-vsm",
-    jwtReady: !!_cachedBoondJwt,
-  });
-});
-
-app.get("/.well-known/oauth-authorization-server", (_req, res) => {
-  const tenantId = process.env.AZURE_TENANT_ID;
-  const clientId = process.env.AZURE_CLIENT_ID;
-  res.json({
-    issuer: "https://login.microsoftonline.com/" + tenantId + "/v2.0",
-    authorization_endpoint:
-      "https://login.microsoftonline.com/" + tenantId + "/oauth2/v2.0/authorize",
-    token_endpoint:
-      "https://login.microsoftonline.com/" + tenantId + "/oauth2/v2.0/token",
-    scopes_supported: ["openid", "profile", "email", "api://" + clientId + "/boondmanager"],
-    response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code"],
-    code_challenge_methods_supported: ["S256"],
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SSE ENDPOINT
-// Fix: JWT is fetched from cache (pre-loaded at startup) so the transport is
-// created immediately. If cache is empty, we wait at most 10 s before returning
-// 503 — never hanging indefinitely.
-// ─────────────────────────────────────────────────────────────────────────────
-app.get("/sse", async (req, res) => {
+async function handleMcp(req: express.Request, res: express.Response): Promise<void> {
   const userEmail = _defaultUser;
 
   let boondJwt = _cachedBoondJwt;
@@ -221,58 +129,47 @@ app.get("/sse", async (req, res) => {
         ),
       ]);
     } catch (err) {
-      console.error("[SSE] JWT unavailable:", err);
+      console.error("[MCP] JWT unavailable:", err);
       res.status(503).json({ error: "Boondmanager credentials unavailable, retry shortly" });
       return;
     }
   }
 
-  const transport = new SSEServerTransport("/messages", res);
-  activeSessions.set(transport.sessionId, { transport, userEmail, boondJwt });
-  console.log("[SSE] New session:", transport.sessionId, "for", userEmail);
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // stateless: no session persistence
+    enableJsonResponse: false,
+  });
+
+  const server = new McpServer({ name: "boondmanager-vsm", version: "1.0.0" });
+  registerAllTools(server);
 
   res.on("close", () => {
-    activeSessions.delete(transport.sessionId);
-    console.log("[SSE] Disconnected:", transport.sessionId);
+    void transport.close();
+    void server.close();
   });
-
-  const mcpServer = new McpServer({
-    name: "boondmanager-vsm",
-    version: "1.0.0",
-  });
-  registerAllTools(mcpServer);
 
   await requestContext.run({ userEmail, boondJwt }, async () => {
-    await mcpServer.connect(transport);
+    await server.connect(transport);
+    // Pass req.body (already parsed by express.json) as third arg
+    await transport.handleRequest(req, res, req.body);
   });
+}
+
+const app = express();
+app.use(cors({ origin: "*", methods: ["GET", "POST", "DELETE", "OPTIONS"] }));
+app.use(express.json());
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", version: "1.0.0-vsm", jwtReady: !!_cachedBoondJwt });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MESSAGES ENDPOINT
-// Fix: reuses the JWT stored in the session established at /sse.
-// No re-authentication needed — Claude.ai does not send Bearer tokens here.
-// ─────────────────────────────────────────────────────────────────────────────
-app.post("/messages", async (req, res) => {
-  const sessionId = req.query.sessionId as string;
-  const session = activeSessions.get(sessionId);
-  if (!session) {
-    return res.status(404).json({ error: "Unknown session: " + sessionId });
-  }
-  const { transport, userEmail, boondJwt } = session;
-  try {
-    await requestContext.run({ userEmail, boondJwt }, async () => {
-      await transport.handlePostMessage(req, res);
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[MESSAGES] Error:", message);
-    res.status(500).json({ error: message });
-  }
-});
+// Support both /sse (existing Claude.ai URL) and /mcp (MCP standard path)
+app.all("/sse", handleMcp);
+app.all("/mcp", handleMcp);
 
 app.listen(PORT, () => {
-  console.log("Boondmanager MCP Server (Versusmind) - port " + PORT);
-  console.log("  Tenant : " + process.env.AZURE_TENANT_ID);
-  console.log("  App ID : " + process.env.AZURE_CLIENT_ID);
-  console.log("  KV URL : " + process.env.AZURE_KEYVAULT_URL);
+  console.log("Boondmanager MCP Server (Versusmind) - Streamable HTTP - port " + PORT);
+  console.log("  Endpoint : /sse  and  /mcp");
+  console.log("  Tenant   : " + process.env.AZURE_TENANT_ID);
+  console.log("  KV URL   : " + process.env.AZURE_KEYVAULT_URL);
 });

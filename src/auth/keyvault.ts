@@ -1,10 +1,13 @@
 import { SecretClient } from "@azure/keyvault-secrets";
-import { DefaultAzureCredential } from "@azure/identity";
+import { ManagedIdentityCredential } from "@azure/identity";
 import { buildJwt } from "../services/boond-client.js";
 
+// System-assigned managed identity — no client ID needed.
+// DefaultAzureCredential would pick up AZURE_CLIENT_ID (the Entra app registration)
+// and wrongly treat it as a user-assigned identity client ID, causing auth failure.
 const kvClient = new SecretClient(
   process.env.AZURE_KEYVAULT_URL!,
-  new DefaultAzureCredential()
+  new ManagedIdentityCredential()
 );
 
 interface CachedCreds {

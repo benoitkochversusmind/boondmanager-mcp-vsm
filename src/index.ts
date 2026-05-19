@@ -111,6 +111,19 @@ async function authMiddleware(
     const raw = req.headers.authorization ?? "";
     const token = raw.startsWith("Bearer ") ? raw.slice(7) : null;
     if (!token) throw new Error("Authorization header missing");
+
+    // Mode 1 : API key statique (pour Claude.ai remote MCP)
+    const apiKey = process.env.MCP_API_KEY;
+    if (apiKey && token === apiKey) {
+      const userEmail = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
+      req.userEmail = userEmail;
+      req.boondJwt = await getBoondJwtForUser(userEmail);
+      console.log("[AUTH] API key accepted for: " + userEmail);
+      next();
+      return;
+    }
+
+    // Mode 2 : Token Microsoft Entra ID
     const userEmail = await validateEntraToken(token);
     const boondJwt = await getBoondJwtForUser(userEmail);
     req.userEmail = userEmail;
@@ -120,6 +133,7 @@ async function authMiddleware(
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn("[AUTH] Refused: " + message);
+    res.setHeader("WWW-Authenticate", "Bearer realm=\"Boondmanager MCP\"");
     res.status(401).json({ error: "Unauthorized", detail: message });
   }
 }

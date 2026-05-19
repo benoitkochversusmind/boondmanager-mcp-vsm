@@ -164,9 +164,12 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
 
 const activeTransports = new Map<string, SSEServerTransport>();
 
-app.get("/sse", authMiddleware, async (req, res) => {
-  const userEmail = req.userEmail!;
-  const boondJwt = req.boondJwt!;
+app.get("/sse", async (req, res) => {
+  const userEmail = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
+  const boondJwt = await getBoondJwtForUser(userEmail);
+  req.userEmail = userEmail;
+  req.boondJwt = boondJwt;
+  
 
   const transport = new SSEServerTransport("/messages", res);
   activeTransports.set(transport.sessionId, transport);

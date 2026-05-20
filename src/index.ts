@@ -48,23 +48,54 @@ REQUIRED_ENV.forEach((k) => {
 });
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
-const _defaultUser = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
-let _cachedBoondJwt: string = "";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// USER REGISTRY
+// Maps MCP tokens to Boondmanager user emails.
+// Convention: MCP_USER_n_TOKEN + MCP_USER_n_EMAIL (n = 1, 2, 3, ...)
+// Example:
+//   MCP_USER_1_TOKEN=vsm-mcp-abc123  MCP_USER_1_EMAIL=benoit.koch@versusmind.eu
+//   MCP_USER_2_TOKEN=vsm-mcp-def456  MCP_USER_2_EMAIL=elie.dahan@versusmind.eu
+// ─────────────────────────────────────────────────────────────────────────────
+interface UserEntry {
+  token: string;
+  email: string;
+  cachedJwt: string;
+}
+
+function buildUserRegistry(): Map<string, UserEntry> {
+  const registry = new Map<string, UserEntry>();
+  let n = 1;
+  while (true) {
+    const tokenKey = `MCP_USER_${n}_TOKEN`;
+    const emailKey = `MCP_USER_${n}_EMAIL`;
+    const token = process.env[tokenKey];
+    const email = process.env[emailKey];
+    if (!token || !email) break;
+    registry.set(token, { token, email, cachedJwt: "" });
+    n++;
+  }
+  return registry;
+}
+
+const _users = buildUserRegistry();
+
+if (_users.size === 0) {
+  console.error("No users configured. Set MCP_USER_1_TOKEN and MCP_USER_1_EMAIL.");
+  process.exit(1);
+}
+
+// Pre-cache all users JWTs at startup
 (async () => {
-  try {
-    _cachedBoondJwt = await getBoondJwtForUser(_defaultUser);
-    console.log("[INIT] Boond JWT pre-cached for:", _defaultUser);
-  } catch (err) {
-    console.warn("[INIT] Boond JWT pre-cache failed (will retry on first request):", err);
+  for (const entry of _users.values()) {
+    try {
+      entry.cachedJwt = await getBoondJwtForUser(entry.email);
+      console.log("[INIT] JWT pre-cached for:", entry.email);
+    } catch (err) {
+      console.warn("[INIT] JWT pre-cache failed for " + entry.email + ":", err);
+    }
   }
 })();
-
-async function getBoondJwtCached(userEmail: string): Promise<string> {
-  if (_cachedBoondJwt) return _cachedBoondJwt;
-  _cachedBoondJwt = await getBoondJwtForUser(userEmail);
-  return _cachedBoondJwt;
-}
 
 function registerAllTools(server: McpServer): void {
   registerCandidateTools(server);
@@ -107,44 +138,54 @@ function registerAllTools(server: McpServer): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AUTH — Bearer token check (MCP_API_KEY env var)
-// If MCP_API_KEY is not set, auth is disabled (dev/test only).
+// AUTH — resolve user from token (Bearer header or ?token= query param)
 // ─────────────────────────────────────────────────────────────────────────────
-function checkAuth(req: express.Request, res: express.Response): boolean {
-  const apiKey = process.env.MCP_API_KEY;
-  if (!apiKey) return true; // no key configured → open (should not happen in prod)
-  // Accept token from Authorization header OR query string ?token=
+async function resolveUser(
+  req: express.Request,
+  res: express.Response
+): Promise<UserEntry | null> {
   const auth = req.headers["authorization"] ?? "";
   const fromHeader = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   const fromQuery = (req.query.token as string) ?? "";
   const provided = fromHeader || fromQuery;
-  if (provided !== apiKey) {
-    console.warn("[AUTH] Rejected request — invalid or missing token");
-    res.status(401).json({ error: "Unauthorized", detail: "Valid Bearer token or ?token= required" });
-    return false;
+
+  if (!provided) {
+    res.status(401).json({ error: "Unauthorized", detail: "Bearer token or ?token= required" });
+    return null;
   }
-  return true;
-}
 
-async function handleMcp(req: express.Request, res: express.Response): Promise<void> {
-  if (!checkAuth(req, res)) return;
+  const entry = _users.get(provided);
+  if (!entry) {
+    console.warn("[AUTH] Unknown token:", provided.substring(0, 12) + "...");
+    res.status(401).json({ error: "Unauthorized", detail: "Invalid token" });
+    return null;
+  }
 
-  const userEmail = _defaultUser;
-  let boondJwt = _cachedBoondJwt;
-  if (!boondJwt) {
+  // Refresh JWT if not cached
+  if (!entry.cachedJwt) {
     try {
-      boondJwt = await Promise.race([
-        getBoondJwtCached(userEmail),
+      entry.cachedJwt = await Promise.race([
+        getBoondJwtForUser(entry.email),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("JWT fetch timeout after 10 s")), 10_000)
+          setTimeout(() => reject(new Error("JWT timeout")), 10_000)
         ),
       ]);
     } catch (err) {
-      console.error("[MCP] JWT unavailable:", err);
-      res.status(503).json({ error: "Boondmanager credentials unavailable, retry shortly" });
-      return;
+      console.error("[AUTH] JWT unavailable for " + entry.email + ":", err);
+      res.status(503).json({ error: "Boondmanager credentials unavailable for user" });
+      return null;
     }
   }
+
+  return entry;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP HANDLER — Streamable HTTP, stateless, multi-user
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleMcp(req: express.Request, res: express.Response): Promise<void> {
+  const user = await resolveUser(req, res);
+  if (!user) return;
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -155,7 +196,7 @@ async function handleMcp(req: express.Request, res: express.Response): Promise<v
 
   res.on("close", () => { void transport.close(); void server.close(); });
 
-  await requestContext.run({ userEmail, boondJwt }, async () => {
+  await requestContext.run({ userEmail: user.email, boondJwt: user.cachedJwt }, async () => {
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   });
@@ -166,7 +207,11 @@ app.use(cors({ origin: "*", methods: ["GET", "POST", "DELETE", "OPTIONS"] }));
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", version: "1.0.0-vsm", jwtReady: !!_cachedBoondJwt });
+  const users = Array.from(_users.values()).map(u => ({
+    email: u.email,
+    jwtReady: !!u.cachedJwt
+  }));
+  res.json({ status: "ok", version: "1.0.0-vsm", users });
 });
 
 app.all("/sse", handleMcp);
@@ -174,7 +219,7 @@ app.all("/mcp", handleMcp);
 
 app.listen(PORT, () => {
   console.log("Boondmanager MCP Server (Versusmind) - Streamable HTTP - port " + PORT);
-  console.log("  Auth     : " + (process.env.MCP_API_KEY ? "enabled (Bearer token)" : "DISABLED — set MCP_API_KEY"));
+  console.log("  Users    : " + Array.from(_users.values()).map(u => u.email).join(", "));
   console.log("  Tenant   : " + process.env.AZURE_TENANT_ID);
   console.log("  KV URL   : " + process.env.AZURE_KEYVAULT_URL);
 });

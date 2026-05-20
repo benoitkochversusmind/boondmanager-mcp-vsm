@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerActionTools, formatActionSummary, stripHtml } from "./actions.js";
+import type { JsonApiResource } from "../types.js";
+import {
+  registerActionTools,
+  formatActionSummary,
+  stripHtml,
+  resetActionTypeLabelsForTests,
+  type ActionFormatContext,
+} from "./actions.js";
+import { ActionSearchSchema } from "../schemas/index.js";
 
 function createMockServer() {
   return {
@@ -8,11 +16,25 @@ function createMockServer() {
   } as unknown as McpServer;
 }
 
+function indexFromIncluded(included: JsonApiResource[]): Map<string, JsonApiResource> {
+  const m = new Map<string, JsonApiResource>();
+  for (const r of included) m.set(`${r.type}:${r.id}`, r);
+  return m;
+}
+
+function makeCtx(opts: { included?: JsonApiResource[]; typeLabels?: Map<number, string> } = {}): ActionFormatContext {
+  return {
+    included: indexFromIncluded(opts.included ?? []),
+    typeLabels: opts.typeLabels ?? new Map(),
+  };
+}
+
 describe("registerActionTools", () => {
   let server: McpServer;
 
   beforeEach(() => {
     server = createMockServer();
+    resetActionTypeLabelsForTests();
   });
 
   it("should register 4 action tools", () => {
@@ -48,6 +70,17 @@ describe("registerActionTools", () => {
   });
 });
 
+describe("ActionSearchSchema (managerId)", () => {
+  it("accepts a managerId filter", () => {
+    const result = ActionSearchSchema.safeParse({ managerId: "36952" });
+    expect(result.success).toBe(true);
+  });
+
+  it("still rejects unknown fields (strict mode)", () => {
+    expect(ActionSearchSchema.safeParse({ mainManagers: ["36952"] }).success).toBe(false);
+  });
+});
+
 describe("stripHtml", () => {
   it("removes tags and decodes common entities", () => {
     expect(stripHtml("<p>Hello&nbsp;<b>world</b></p>")).toBe("Hello world");
@@ -60,105 +93,121 @@ describe("stripHtml", () => {
   });
 
   it("does not decode entities outside the small allowlist", () => {
-    // &copy; isn't in the list — should remain as-is.
     expect(stripHtml("<span>&copy; 2026</span>")).toBe("&copy; 2026");
   });
 });
 
 describe("formatActionSummary", () => {
-  it("renders fields in the canonical order: id | date | typeLabel | manager | linkedTo | text", () => {
-    const out = formatActionSummary({
-      id: "12345",
-      type: "action",
-      attributes: {
-        startDate: "2026-05-20 14:00",
-        typeLabel: "Note",
-        text: "Suivi commercial après envoi de la proposition.",
-        manager: { nom: "Jean-Yves LOISEAU" },
-        linkedTo: { type: "contact", nom: "Jean Martin", id: 789 },
-      },
+  // Sample built to mirror the real /actions payload shape captured from
+  // ACA logs: typeOf as a numeric id, mainManager / dependsOn as JSON:API
+  // relationships, included carrying the resolved entities.
+  const sampleAction = {
+    id: "216463",
+    type: "action",
+    attributes: {
+      startDate: "2026-05-20T15:40:54+0200",
+      typeOf: 35,
+      text: "<p>Bonjour Florent, je me permets…</p>",
+    },
+    relationships: {
+      mainManager: { data: { id: "36952", type: "resource" } },
+      dependsOn: { data: { id: "16259", type: "contact" } },
+      company: { data: { id: "1291", type: "company" } },
+    },
+  };
+
+  it("renders the canonical line with included resolution + dictionary type label", () => {
+    const ctx = makeCtx({
+      typeLabels: new Map([[35, "Note"]]),
+      included: [
+        { id: "36952", type: "resource", attributes: { firstName: "Jean-Yves", lastName: "LOISEAU" } },
+        { id: "16259", type: "contact", attributes: { firstName: "Florent", lastName: "Nallatamby" } },
+      ],
     });
+    const out = formatActionSummary(sampleAction, ctx);
     expect(out).toBe(
-      "[action #12345] | 2026-05-20 14:00 | Note | par Jean-Yves LOISEAU | → contact Jean Martin (#789) | Suivi commercial après envoi de la proposition."
+      "[action #216463] | 2026-05-20T15:40:54+0200 | Note | par Jean-Yves LOISEAU | → contact Florent Nallatamby (#16259) | Bonjour Florent, je me permets…"
     );
   });
 
-  it("strips HTML tags and decodes entities in the text field", () => {
-    const out = formatActionSummary({
-      id: "99",
-      attributes: {
-        text: "<p>Appel&nbsp;client&nbsp;: <b>OK</b> pour la suite. L&#39;équipe valide.</p><p>&lt;urgent&gt;</p>",
-      },
-    });
-    expect(out).toContain("Appel client : OK pour la suite. L'équipe valide. <urgent>");
-    expect(out).not.toContain("&nbsp;");
-    expect(out).not.toContain("&#39;");
-    expect(out).not.toContain("<p>");
-    expect(out).not.toContain("<b>");
+  it("falls back to type#N when the dictionary cache is empty", () => {
+    const out = formatActionSummary(sampleAction, makeCtx({ included: [] }));
+    expect(out).toContain("type#35");
   });
 
-  it("truncates very long text and collapses whitespace after stripping HTML", () => {
-    const longText = "A".repeat(500);
-    const out = formatActionSummary({
+  it("resolves a company as linked entity via its `name` attribute", () => {
+    const action = {
       id: "1",
-      attributes: { text: `<p>prefix</p>\n\n  ${longText}` },
+      type: "action",
+      attributes: { typeOf: 35 },
+      relationships: { dependsOn: { data: { id: "1291", type: "company" } } },
+    };
+    const ctx = makeCtx({
+      included: [{ id: "1291", type: "company", attributes: { name: "Versusmind" } }],
     });
+    expect(formatActionSummary(action, ctx)).toContain("→ company Versusmind (#1291)");
+  });
+
+  it("skips the linked entity when its include is missing from the response", () => {
+    const action = {
+      id: "1",
+      attributes: {},
+      relationships: { dependsOn: { data: { id: "9999", type: "contact" } } },
+    };
+    const out = formatActionSummary(action, makeCtx({ included: [] }));
+    expect(out).toBe("[action #1]");
+  });
+
+  it("falls back to #id when a person has no firstName/lastName", () => {
+    const action = {
+      id: "1",
+      attributes: { typeOf: 35 },
+      relationships: { dependsOn: { data: { id: "5", type: "contact" } } },
+    };
+    const ctx = makeCtx({
+      included: [{ id: "5", type: "contact", attributes: {} }],
+    });
+    expect(formatActionSummary(action, ctx)).toContain("→ contact #5 (#5)");
+  });
+
+  it("strips HTML tags and decodes entities in the text field", () => {
+    const out = formatActionSummary(
+      {
+        id: "99",
+        attributes: {
+          text: "<p>Appel&nbsp;client&nbsp;: <b>OK</b> pour la suite. L&#39;équipe valide.</p><p>&lt;urgent&gt;</p>",
+        },
+      },
+      makeCtx()
+    );
+    expect(out).toContain("Appel client : OK pour la suite. L'équipe valide. <urgent>");
+    expect(out).not.toContain("&nbsp;");
+    expect(out).not.toContain("<p>");
+  });
+
+  it("truncates very long text", () => {
+    const longText = "A".repeat(500);
+    const out = formatActionSummary({ id: "1", attributes: { text: `<p>prefix</p>\n\n  ${longText}` } }, makeCtx());
     expect(out).toMatch(/prefix .+…$/);
     expect(out.length).toBeLessThan(500);
   });
 
   it("drops the text field when stripping leaves an empty string", () => {
-    const out = formatActionSummary({ id: "5", attributes: { text: "<br/><p>&nbsp;</p>" } });
+    const out = formatActionSummary({ id: "5", attributes: { text: "<br/><p>&nbsp;</p>" } }, makeCtx());
     expect(out).toBe("[action #5]");
   });
 
-  it("omits missing fields gracefully", () => {
-    const out = formatActionSummary({ id: "42", attributes: {} });
+  it("omits missing relationships gracefully", () => {
+    const out = formatActionSummary({ id: "42", attributes: {} }, makeCtx());
     expect(out).toBe("[action #42]");
   });
 
-  it("handles linkedTo without an id", () => {
-    const out = formatActionSummary({
-      id: "7",
-      attributes: { linkedTo: { type: "company", nom: "Acme" } },
-    });
-    expect(out).toContain("→ company Acme");
-    expect(out).not.toContain("(#");
-  });
-
-  it("handles a manager object without a nom", () => {
-    const out = formatActionSummary({
-      id: "8",
-      attributes: { manager: { firstName: "X" } },
-    });
-    expect(out).toBe("[action #8]");
-  });
-
-  it("falls back to typeOf as 'type#N' when typeLabel is absent (numeric id)", () => {
-    const out = formatActionSummary({ id: "10", attributes: { typeOf: 7 } });
-    expect(out).toContain("type#7");
-  });
-
-  it("falls back to typeOf as 'type#N' when typeLabel is absent (string id)", () => {
-    const out = formatActionSummary({ id: "11", attributes: { typeOf: "rdv" } });
-    expect(out).toContain("type#rdv");
-  });
-
-  it("uses typeOf.label or typeOf.name when typeOf is an object", () => {
-    const labelOut = formatActionSummary({ id: "12", attributes: { typeOf: { id: 7, label: "Note" } } });
-    expect(labelOut).toContain("Note");
-    expect(labelOut).not.toContain("type#");
-
-    const nameOut = formatActionSummary({ id: "13", attributes: { typeOf: { id: 7, name: "Email" } } });
-    expect(nameOut).toContain("Email");
-  });
-
-  it("prefers typeLabel over typeOf when both are present", () => {
-    const out = formatActionSummary({
-      id: "14",
-      attributes: { typeLabel: "Note", typeOf: 7 },
-    });
-    expect(out).toContain("Note");
-    expect(out).not.toContain("type#");
+  it("works without a ctx (degraded mode — only attributes-derived fields)", () => {
+    const out = formatActionSummary(sampleAction);
+    expect(out).toContain("[action #216463]");
+    expect(out).toContain("2026-05-20T15:40:54+0200");
+    expect(out).toContain("type#35"); // no dictionary → fallback
+    expect(out).not.toContain("par "); // no included → no manager
+    expect(out).not.toContain("→ "); // no included → no linked entity
   });
 });

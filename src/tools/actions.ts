@@ -2,7 +2,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ActionSearchSchema, ActionCreateSchema, IdSchema } from "../schemas/index.js";
 import { apiRequest, buildSearchQuery, formatDetailResponse } from "../services/boond-client.js";
 import { CHARACTER_LIMIT } from "../constants.js";
+import { getDictionary, resolveDictionaryPath } from "../services/dictionary.js";
 import { logger } from "../services/logger.js";
+import type { JsonApiResource, JsonApiResponse } from "../types.js";
 import { buildJsonApiBody } from "./crud-factory.js";
 
 // Per-action soft cap on the `text` field. Action notes can be paragraphs;
@@ -10,11 +12,6 @@ import { buildJsonApiBody } from "./crud-factory.js";
 // note can fall back to boond_actions_get.
 const ACTION_TEXT_MAX = 300;
 
-// Action notes from BoondManager are stored as HTML (the web UI uses a rich
-// text editor), so a raw dump leaks <p>, <br>, &nbsp; etc. into the MCP output.
-// We strip tags and decode the handful of entities that actually appear in
-// practice — full HTML entity decoding would need a library, but this covers
-// the noise we see.
 const HTML_ENTITIES: Record<string, string> = {
   "&amp;": "&",
   "&gt;": ">",
@@ -34,49 +31,137 @@ export function stripHtml(input: string): string {
     .trim();
 }
 
-// Best-effort coercion of the action `typeOf` field — per the BoondManager RAML
-// the list endpoint exposes `typeOf` (often a numeric ID) but not `typeLabel`,
-// so we use whatever shape we get. A separate dictionary lookup (setting.typeOf.action
-// via boond_application_dictionary) is needed to resolve IDs to human labels.
-function formatActionType(attrs: Record<string, unknown>): string | undefined {
-  if (attrs.typeLabel) return String(attrs.typeLabel);
-  const t = attrs.typeOf;
-  if (t === undefined || t === null) return undefined;
-  if (typeof t === "string" || typeof t === "number") return `type#${t}`;
-  if (typeof t === "object") {
-    const o = t as Record<string, unknown>;
-    if (o.label) return String(o.label);
-    if (o.name) return String(o.name);
-    if (o.id !== undefined) return `type#${String(o.id)}`;
-  }
-  return undefined;
+// ---- Action type label cache ----------------------------------------------
+// The /actions list returns `typeOf` as a numeric id (e.g. 35). BoondManager
+// exposes the label table at setting.typeOf.action via the dictionary endpoint.
+// We load it once per process the first time we need it and keep it in memory.
+// On lookup failure we cache an empty map so a transient API issue doesn't
+// cascade into a retry on every search.
+
+let actionTypeLabels: Map<number, string> | null = null;
+let actionTypeLabelsInFlight: Promise<Map<number, string>> | null = null;
+
+async function loadActionTypeLabels(): Promise<Map<number, string>> {
+  if (actionTypeLabels) return actionTypeLabels;
+  if (actionTypeLabelsInFlight) return actionTypeLabelsInFlight;
+  actionTypeLabelsInFlight = (async () => {
+    try {
+      const { payload } = await getDictionary();
+      const node = resolveDictionaryPath(payload, "setting.typeOf.action");
+      const map = new Map<number, string>();
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          if (item && typeof item === "object") {
+            const i = item as { id?: unknown; value?: unknown };
+            const numId = typeof i.id === "number" ? i.id : Number(i.id);
+            if (Number.isFinite(numId) && i.value !== undefined && i.value !== null) {
+              map.set(numId, String(i.value));
+            }
+          }
+        }
+      }
+      actionTypeLabels = map;
+      return map;
+    } catch (err) {
+      logger.warn({ err }, "Failed to load setting.typeOf.action; falling back to type#N");
+      actionTypeLabels = new Map();
+      return actionTypeLabels;
+    } finally {
+      actionTypeLabelsInFlight = null;
+    }
+  })();
+  return actionTypeLabelsInFlight;
 }
 
-export function formatActionSummary(entity: unknown): string {
+export function resetActionTypeLabelsForTests(): void {
+  actionTypeLabels = null;
+  actionTypeLabelsInFlight = null;
+}
+
+// ---- JSON:API included resolution -----------------------------------------
+// /actions returns relationships (mainManager, dependsOn, company, ...) whose
+// full attributes are in the top-level `included` array. We index that array
+// once per response and resolve relationships via lookups.
+
+type IncludedIndex = Map<string, JsonApiResource>;
+
+function buildIncludedIndex(response: JsonApiResponse): IncludedIndex {
+  const idx: IncludedIndex = new Map();
+  for (const r of response.included ?? []) {
+    idx.set(`${r.type}:${r.id}`, r);
+  }
+  return idx;
+}
+
+function lookupRelated(included: IncludedIndex, rel: unknown): JsonApiResource | undefined {
+  if (!rel || typeof rel !== "object") return undefined;
+  const data = (rel as { data?: unknown }).data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const ref = data as { id?: string; type?: string };
+  if (!ref.id || !ref.type) return undefined;
+  return included.get(`${ref.type}:${ref.id}`);
+}
+
+function formatPersonName(attrs: Record<string, unknown> | undefined): string {
+  if (!attrs) return "";
+  const fn = attrs.firstName ? String(attrs.firstName) : "";
+  const ln = attrs.lastName ? String(attrs.lastName) : "";
+  return [fn, ln].filter(Boolean).join(" ").trim();
+}
+
+function formatRelatedEntityLabel(entity: JsonApiResource): string {
+  const attrs = entity.attributes ?? {};
+  if (attrs.name) return String(attrs.name);
+  const person = formatPersonName(attrs as Record<string, unknown>);
+  return person || `#${entity.id}`;
+}
+
+// ---- Formatter ------------------------------------------------------------
+
+export interface ActionFormatContext {
+  included: IncludedIndex;
+  typeLabels: Map<number, string>;
+}
+
+export function formatActionSummary(entity: unknown, ctx?: ActionFormatContext): string {
   const e = (entity ?? {}) as Record<string, unknown>;
   const id = e.id !== undefined ? String(e.id) : "?";
   const attrs = (e.attributes ?? {}) as Record<string, unknown>;
+  const rels = (e.relationships ?? {}) as Record<string, unknown>;
   const parts: string[] = [`[action #${id}]`];
 
   if (attrs.startDate) parts.push(String(attrs.startDate));
-  const type = formatActionType(attrs);
-  if (type) parts.push(type);
 
-  const manager = attrs.manager;
-  if (manager && typeof manager === "object") {
-    const mgr = manager as Record<string, unknown>;
-    if (mgr.nom) parts.push(`par ${String(mgr.nom)}`);
+  // typeOf — dictionary label when available, fallback to type#N.
+  const typeOf = attrs.typeOf;
+  if (typeOf !== undefined && typeOf !== null) {
+    const numId = typeof typeOf === "number" ? typeOf : Number(typeOf);
+    if (Number.isFinite(numId)) {
+      const label = ctx?.typeLabels.get(numId);
+      parts.push(label ?? `type#${numId}`);
+    } else if (typeof typeOf === "string") {
+      parts.push(`type#${typeOf}`);
+    }
   }
 
-  const linked = attrs.linkedTo;
-  if (linked && typeof linked === "object") {
-    const lk = linked as Record<string, unknown>;
-    const t = lk.type ? String(lk.type) : "";
-    const n = lk.nom ? String(lk.nom) : "";
-    const lid = lk.id !== undefined ? String(lk.id) : "";
-    const label = [t, n].filter(Boolean).join(" ");
-    const tail = lid ? `${label} (#${lid})`.trim() : label;
-    if (tail) parts.push(`→ ${tail}`);
+  // Author — via JSON:API relationships.mainManager → included resource.
+  if (ctx?.included) {
+    const mgr = lookupRelated(ctx.included, rels.mainManager);
+    if (mgr) {
+      const name = formatPersonName(mgr.attributes as Record<string, unknown>);
+      if (name) parts.push(`par ${name}`);
+    }
+  }
+
+  // Linked entity — via relationships.dependsOn → included contact / candidate /
+  // company / opportunity. Falls back gracefully to the raw {type, id} ref when
+  // the include resolution misses (rare but possible if BoondManager omits the
+  // include for some relationship).
+  if (ctx?.included) {
+    const dep = lookupRelated(ctx.included, rels.dependsOn);
+    if (dep) {
+      parts.push(`→ ${dep.type} ${formatRelatedEntityLabel(dep)} (#${dep.id})`);
+    }
   }
 
   if (attrs.text) {
@@ -89,13 +174,16 @@ export function formatActionSummary(entity: unknown): string {
   return parts.join(" | ");
 }
 
-function formatActionsList(response: { data: unknown; meta?: { totals?: { rows?: number } } }): string {
+async function formatActionsList(response: JsonApiResponse): Promise<string> {
   const data = Array.isArray(response.data) ? response.data : [response.data];
   if (data.length === 0 || (data.length === 1 && !data[0])) {
     return "Aucun(e) action trouvé(e).";
   }
+  const included = buildIncludedIndex(response);
+  const typeLabels = await loadActionTypeLabels();
+  const ctx: ActionFormatContext = { included, typeLabels };
   const total = response.meta?.totals?.rows;
-  const lines = data.map((item) => formatActionSummary(item));
+  const lines = data.map((item) => formatActionSummary(item, ctx));
   let result = lines.join("\n");
   if (total !== undefined) {
     result = `Total: ${total} action(s)\n\n${result}`;
@@ -112,21 +200,19 @@ export function registerActionTools(server: McpServer): void {
     "boond_actions_search",
     {
       title: "Rechercher des actions",
-      description: `Recherche des actions (appels, emails, RDV, notes) dans BoondManager avec filtres optionnels par candidat, ressource, contact ou société.
+      description: `Recherche des actions (appels, emails, RDV, notes) dans BoondManager avec filtres optionnels par candidat, ressource, contact, société ou auteur.
 
 Args:
   - keywords (string, optional): Termes de recherche
   - candidateId, resourceId, contactId, companyId (string, optional): Filtrer par entité liée
+  - managerId (string, optional): Filtrer par auteur (ID de la ressource manager — mappé sur \`mainManagers[]\` côté API)
   - dateFrom, dateTo (YYYY-MM-DD, optional): Bornes de période
   - period ('started' | 'created' | 'updated', défaut 'started'): Champ date sur lequel s'appliquent dateFrom/dateTo
   - page, pageSize: Pagination
 
-Returns: Liste des actions correspondantes.
+Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type | par auteur | → entité liée | extrait du texte\`. Le label de type est résolu via \`setting.typeOf.action\` (dictionnaire BoondManager, mis en cache). L'auteur et l'entité liée sont résolus via le tableau JSON:API \`included\` de la réponse.
 
-⚠️ Limitations connues de l'endpoint /actions (liste) côté BoondManager :
-  - Le label du type d'action n'est pas garanti. Seul \`typeOf\` (ID numérique) est exposé par défaut ; le rendu affiche alors \`type#<id>\`. Pour traduire en label, utiliser \`boond_application_dictionary\` avec \`type = setting.typeOf.action\`.
-  - L'auteur (\`manager.nom\`) et l'entité liée (\`linkedTo\`) ne sont pas remontés dans le payload de liste par défaut. Pour ces champs, appeler \`boond_actions_get\` sur l'ID concerné.
-  - Le filtre \`period: 'created'\` cible le champ \`started\` de l'action et non la date de création réelle en base — limitation côté API BoondManager elle-même.`,
+ℹ️ Le filtre \`period: 'created'\` cible le champ \`started\` de l'action côté API BoondManager (et non la date de création réelle en base) — limitation côté API.`,
       inputSchema: ActionSearchSchema,
       annotations: {
         readOnlyHint: true,
@@ -136,31 +222,17 @@ Returns: Liste des actions correspondantes.
       },
     },
     async (params) => {
-      const query = buildSearchQuery(params);
-      const response = await apiRequest("/actions", "GET", undefined, query);
-      // One-shot shape inspection: emits a structured trace of the first item
-      // when LOG_LEVEL=debug. Cheap to leave on (only the keys + a single
-      // sample payload at debug level), and the only way to confirm what
-      // BoondManager actually returns without re-deploying. Strip later if
-      // it ever shows up in noise.
-      if (logger.isLevelEnabled("debug")) {
-        const data = Array.isArray(response.data) ? response.data : [response.data];
-        const sample = data[0];
-        logger.debug(
-          {
-            count: data.length,
-            attributeKeys: sample?.attributes ? Object.keys(sample.attributes) : [],
-            relationshipKeys: sample?.relationships ? Object.keys(sample.relationships) : [],
-            includedTypes: Array.isArray(response.included)
-              ? Array.from(new Set(response.included.map((r) => r.type)))
-              : [],
-            sample,
-          },
-          "boond_actions_search raw shape"
-        );
+      const { managerId, ...rest } = params;
+      const query = buildSearchQuery(rest);
+      if (managerId) {
+        // BoondManager expects the array form mainManagers[]=<id>. We keep
+        // the schema name singular (managerId) for ergonomic parity with the
+        // existing candidateId / resourceId / contactId / companyId filters.
+        query.mainManagers = [managerId];
       }
+      const response = await apiRequest("/actions", "GET", undefined, query);
       return {
-        content: [{ type: "text" as const, text: formatActionsList(response) }],
+        content: [{ type: "text" as const, text: await formatActionsList(response) }],
       };
     }
   );

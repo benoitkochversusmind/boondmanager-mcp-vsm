@@ -635,6 +635,12 @@ export const ActionSearchSchema = z
     resourceId: z.string().optional().describe("Filtrer par ID ressource"),
     contactId: z.string().optional().describe("Filtrer par ID contact"),
     companyId: z.string().optional().describe("Filtrer par ID société"),
+    managerId: z
+      .string()
+      .optional()
+      .describe(
+        "Filtrer par auteur de l'action (ID de la ressource manager). Mappé sur `mainManagers[]` côté API BoondManager."
+      ),
     dateFrom: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/)

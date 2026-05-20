@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ActionSearchSchema, ActionCreateSchema, IdSchema } from "../schemas/index.js";
 import { apiRequest, buildSearchQuery, formatDetailResponse } from "../services/boond-client.js";
 import { CHARACTER_LIMIT } from "../constants.js";
+import { logger } from "../services/logger.js";
 import { buildJsonApiBody } from "./crud-factory.js";
 
 // Per-action soft cap on the `text` field. Action notes can be paragraphs;
@@ -33,6 +34,24 @@ export function stripHtml(input: string): string {
     .trim();
 }
 
+// Best-effort coercion of the action `typeOf` field — per the BoondManager RAML
+// the list endpoint exposes `typeOf` (often a numeric ID) but not `typeLabel`,
+// so we use whatever shape we get. A separate dictionary lookup (setting.typeOf.action
+// via boond_application_dictionary) is needed to resolve IDs to human labels.
+function formatActionType(attrs: Record<string, unknown>): string | undefined {
+  if (attrs.typeLabel) return String(attrs.typeLabel);
+  const t = attrs.typeOf;
+  if (t === undefined || t === null) return undefined;
+  if (typeof t === "string" || typeof t === "number") return `type#${t}`;
+  if (typeof t === "object") {
+    const o = t as Record<string, unknown>;
+    if (o.label) return String(o.label);
+    if (o.name) return String(o.name);
+    if (o.id !== undefined) return `type#${String(o.id)}`;
+  }
+  return undefined;
+}
+
 export function formatActionSummary(entity: unknown): string {
   const e = (entity ?? {}) as Record<string, unknown>;
   const id = e.id !== undefined ? String(e.id) : "?";
@@ -40,7 +59,8 @@ export function formatActionSummary(entity: unknown): string {
   const parts: string[] = [`[action #${id}]`];
 
   if (attrs.startDate) parts.push(String(attrs.startDate));
-  if (attrs.typeLabel) parts.push(String(attrs.typeLabel));
+  const type = formatActionType(attrs);
+  if (type) parts.push(type);
 
   const manager = attrs.manager;
   if (manager && typeof manager === "object") {
@@ -101,7 +121,12 @@ Args:
   - period ('started' | 'created' | 'updated', défaut 'started'): Champ date sur lequel s'appliquent dateFrom/dateTo
   - page, pageSize: Pagination
 
-Returns: Liste des actions correspondantes.`,
+Returns: Liste des actions correspondantes.
+
+⚠️ Limitations connues de l'endpoint /actions (liste) côté BoondManager :
+  - Le label du type d'action n'est pas garanti. Seul \`typeOf\` (ID numérique) est exposé par défaut ; le rendu affiche alors \`type#<id>\`. Pour traduire en label, utiliser \`boond_application_dictionary\` avec \`type = setting.typeOf.action\`.
+  - L'auteur (\`manager.nom\`) et l'entité liée (\`linkedTo\`) ne sont pas remontés dans le payload de liste par défaut. Pour ces champs, appeler \`boond_actions_get\` sur l'ID concerné.
+  - Le filtre \`period: 'created'\` cible le champ \`started\` de l'action et non la date de création réelle en base — limitation côté API BoondManager elle-même.`,
       inputSchema: ActionSearchSchema,
       annotations: {
         readOnlyHint: true,
@@ -113,6 +138,27 @@ Returns: Liste des actions correspondantes.`,
     async (params) => {
       const query = buildSearchQuery(params);
       const response = await apiRequest("/actions", "GET", undefined, query);
+      // One-shot shape inspection: emits a structured trace of the first item
+      // when LOG_LEVEL=debug. Cheap to leave on (only the keys + a single
+      // sample payload at debug level), and the only way to confirm what
+      // BoondManager actually returns without re-deploying. Strip later if
+      // it ever shows up in noise.
+      if (logger.isLevelEnabled("debug")) {
+        const data = Array.isArray(response.data) ? response.data : [response.data];
+        const sample = data[0];
+        logger.debug(
+          {
+            count: data.length,
+            attributeKeys: sample?.attributes ? Object.keys(sample.attributes) : [],
+            relationshipKeys: sample?.relationships ? Object.keys(sample.relationships) : [],
+            includedTypes: Array.isArray(response.included)
+              ? Array.from(new Set(response.included.map((r) => r.type)))
+              : [],
+            sample,
+          },
+          "boond_actions_search raw shape"
+        );
+      }
       return {
         content: [{ type: "text" as const, text: formatActionsList(response) }],
       };

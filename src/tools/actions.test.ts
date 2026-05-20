@@ -133,4 +133,32 @@ describe("formatActionSummary", () => {
     });
     expect(out).toBe("[action #8]");
   });
+
+  it("falls back to typeOf as 'type#N' when typeLabel is absent (numeric id)", () => {
+    const out = formatActionSummary({ id: "10", attributes: { typeOf: 7 } });
+    expect(out).toContain("type#7");
+  });
+
+  it("falls back to typeOf as 'type#N' when typeLabel is absent (string id)", () => {
+    const out = formatActionSummary({ id: "11", attributes: { typeOf: "rdv" } });
+    expect(out).toContain("type#rdv");
+  });
+
+  it("uses typeOf.label or typeOf.name when typeOf is an object", () => {
+    const labelOut = formatActionSummary({ id: "12", attributes: { typeOf: { id: 7, label: "Note" } } });
+    expect(labelOut).toContain("Note");
+    expect(labelOut).not.toContain("type#");
+
+    const nameOut = formatActionSummary({ id: "13", attributes: { typeOf: { id: 7, name: "Email" } } });
+    expect(nameOut).toContain("Email");
+  });
+
+  it("prefers typeLabel over typeOf when both are present", () => {
+    const out = formatActionSummary({
+      id: "14",
+      attributes: { typeLabel: "Note", typeOf: 7 },
+    });
+    expect(out).toContain("Note");
+    expect(out).not.toContain("type#");
+  });
 });

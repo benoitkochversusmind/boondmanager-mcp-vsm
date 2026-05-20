@@ -113,11 +113,14 @@ function registerAllTools(server: McpServer): void {
 function checkAuth(req: express.Request, res: express.Response): boolean {
   const apiKey = process.env.MCP_API_KEY;
   if (!apiKey) return true; // no key configured → open (should not happen in prod)
+  // Accept token from Authorization header OR query string ?token=
   const auth = req.headers["authorization"] ?? "";
-  const provided = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const fromHeader = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const fromQuery = (req.query.token as string) ?? "";
+  const provided = fromHeader || fromQuery;
   if (provided !== apiKey) {
-    console.warn("[AUTH] Rejected request — invalid or missing Bearer token");
-    res.status(401).json({ error: "Unauthorized", detail: "Valid Bearer token required" });
+    console.warn("[AUTH] Rejected request — invalid or missing token");
+    res.status(401).json({ error: "Unauthorized", detail: "Valid Bearer token or ?token= required" });
     return false;
   }
   return true;

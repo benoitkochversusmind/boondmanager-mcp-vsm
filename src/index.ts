@@ -474,6 +474,11 @@ async function handleMcp(req: express.Request, res: express.Response): Promise<v
   });
 }
 
+// Alias routes for OAuth clients that construct URLs from issuer (RFC 8414)
+app.get("/authorize", (req, res) => res.redirect(307, "/oauth/authorize?" + new URLSearchParams(req.query as Record<string,string>)));
+app.post("/token", (req, res, next) => { req.url = "/oauth/token"; next(); }, (req, res) => app._router.handle(req, res, () => {}));
+app.get("/register", (_req, res) => res.status(501).json({ error: "not_supported" }));
+
 app.all("/sse", handleMcp);
 app.all("/mcp", handleMcp);
 

@@ -11,6 +11,8 @@ import {
   type ActionFormatContext,
 } from "./actions.js";
 import { ActionSearchSchema } from "../schemas/index.js";
+import * as boondClient from "../services/boond-client.js";
+import * as dictionaryService from "../services/dictionary.js";
 
 function createMockServer() {
   return {
@@ -286,5 +288,106 @@ describe("formatActionSummary", () => {
     expect(out).toContain("type#35"); // no dictionary → fallback
     expect(out).not.toContain("par "); // no included → no manager
     expect(out).not.toContain("→ "); // no included → no linked entity
+  });
+});
+
+describe("boond_actions_search handler — query param mapping", () => {
+  // Spies on the actual API request so we can assert which query the handler
+  // hands off. Each test gets a fresh server + cleared module caches so
+  // dictionary loading does not leak between cases.
+  let server: McpServer;
+  let apiSpy: ReturnType<typeof vi.spyOn>;
+
+  function getSearchHandler() {
+    registerActionTools(server);
+    const call = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_actions_search");
+     
+    return call![2] as (params: Record<string, unknown>) => Promise<unknown>;
+  }
+
+  beforeEach(() => {
+    // vi.spyOn on the same module property returns the existing spy if any,
+    // so its mock.calls accumulates across tests. Reset everything first.
+    vi.restoreAllMocks();
+    server = createMockServer();
+    resetActionTypeLabelsForTests();
+    dictionaryService.resetDictionaryCacheForTests();
+    // The handler also loads the dictionary for type labels; stub it so the
+    // tests do not require network and stay focused on /actions params.
+    vi.spyOn(dictionaryService, "getDictionary").mockResolvedValue({
+      payload: { data: { setting: { action: {} } } },
+      fetchedAt: Date.now(),
+      language: "fr",
+    } as never);
+    apiSpy = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: [] } as never);
+  });
+
+  it("maps managerId → perimeterManagers[]", async () => {
+    await getSearchHandler()({ managerId: "36952", page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.perimeterManagers).toEqual(["36952"]);
+    expect(query).not.toHaveProperty("mainManagers");
+    expect(query).not.toHaveProperty("managerId");
+  });
+
+  it("maps dateFrom → startDate and dateTo → endDate (preserves period)", async () => {
+    await getSearchHandler()({
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-20",
+      period: "started",
+      page: 1,
+      pageSize: 30,
+    });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.startDate).toBe("2026-05-01");
+    expect(query.endDate).toBe("2026-05-20");
+    expect(query.period).toBe("started");
+    expect(query).not.toHaveProperty("dateFrom");
+    expect(query).not.toHaveProperty("dateTo");
+  });
+
+  it("maps typeOf → actionTypes[]", async () => {
+    await getSearchHandler()({ typeOf: [12, 19, 41], page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.actionTypes).toEqual([12, 19, 41]);
+    expect(query).not.toHaveProperty("typeOf");
+  });
+
+  it("omits typeOf when the array is empty", async () => {
+    await getSearchHandler()({ typeOf: [], page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query).not.toHaveProperty("actionTypes");
+  });
+
+  it("combines all four mapped filters in a single call", async () => {
+    await getSearchHandler()({
+      managerId: "36952",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-20",
+      typeOf: [13],
+      period: "created",
+      page: 1,
+      pageSize: 30,
+    });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query).toMatchObject({
+      perimeterManagers: ["36952"],
+      startDate: "2026-05-01",
+      endDate: "2026-05-20",
+      actionTypes: [13],
+      period: "created",
+    });
+  });
+});
+
+describe("ActionSearchSchema (typeOf)", () => {
+  it("accepts an array of integers", () => {
+    const r = ActionSearchSchema.safeParse({ typeOf: [12, 19, 41] });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects non-integer values", () => {
+    expect(ActionSearchSchema.safeParse({ typeOf: ["12"] }).success).toBe(false);
+    expect(ActionSearchSchema.safeParse({ typeOf: [12.5] }).success).toBe(false);
   });
 });

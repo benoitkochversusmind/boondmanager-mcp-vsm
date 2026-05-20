@@ -639,23 +639,35 @@ export const ActionSearchSchema = z
       .string()
       .optional()
       .describe(
-        "Filtrer par auteur de l'action (ID de la ressource manager). Mappé sur `mainManagers[]` côté API BoondManager."
+        "Filtrer par auteur de l'action (ID de la ressource qui a créé l'action). Mappé sur `perimeterManagers[]` côté API BoondManager — le trait searchable définit `perimeterManagers` comme « results whose responsible belongs to these manager IDs », ce qui cible le `mainManager` (= créateur) sur l'endpoint /actions."
       ),
     dateFrom: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/)
       .optional()
-      .describe("Borne inférieure de période (YYYY-MM-DD). Combiner avec `period` pour choisir le champ filtré."),
+      .describe(
+        "Borne inférieure de période (YYYY-MM-DD). Mappé sur `startDate` côté API. Combiner avec `period` pour choisir le champ filtré."
+      ),
     dateTo: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/)
       .optional()
-      .describe("Borne supérieure de période (YYYY-MM-DD). Combiner avec `period` pour choisir le champ filtré."),
+      .describe(
+        "Borne supérieure de période (YYYY-MM-DD). Mappé sur `endDate` côté API. Combiner avec `period` pour choisir le champ filtré."
+      ),
     period: z
       .enum(["started", "created", "updated"])
       .default("started")
       .describe(
         "Champ date filtré par `dateFrom` / `dateTo`. 'started' = date de l'action, 'created' = création, 'updated' = dernière modification. Défaut: 'started'."
+      ),
+    typeOf: z
+      .array(z.number().int())
+      .optional()
+      .describe(
+        "Filtrer par IDs de types d'action (mappé sur `actionTypes[]` côté API). " +
+          "Exemples observés sur cette org : 12=Entretien visio, 19=Entretien présentiel, 13=Note, 41=Appel, 42=Email. " +
+          "Pour la liste complète, lire `boond_application_dictionary` avec `dictionaryType = setting.action` (les types sont scopés par entité linkable : contact, candidate, resource, opportunity, project, order, invoice — mais les IDs sont globaux)."
       ),
     page: z.number().int().min(1).max(MAX_SEARCH_PAGE).default(1).describe(`Numéro de page (max: ${MAX_SEARCH_PAGE})`),
     pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).describe("Résultats par page"),

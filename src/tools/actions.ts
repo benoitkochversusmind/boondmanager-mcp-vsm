@@ -281,17 +281,18 @@ export function registerActionTools(server: McpServer): void {
     "boond_actions_search",
     {
       title: "Rechercher des actions",
-      description: `Recherche des actions (appels, emails, RDV, notes) dans BoondManager avec filtres optionnels par candidat, ressource, contact, société ou auteur.
+      description: `Recherche des actions (appels, emails, RDV, notes) dans BoondManager.
 
 Args:
   - keywords (string, optional): Termes de recherche
   - candidateId, resourceId, contactId, companyId (string, optional): Filtrer par entité liée
-  - managerId (string, optional): Filtrer par auteur (ID de la ressource manager — mappé sur \`mainManagers[]\` côté API)
-  - dateFrom, dateTo (YYYY-MM-DD, optional): Bornes de période
-  - period ('started' | 'created' | 'updated', défaut 'started'): Champ date sur lequel s'appliquent dateFrom/dateTo
+  - managerId (string, optional): Filtrer par auteur (créateur de l'action). Mappé sur \`perimeterManagers[]\` côté API.
+  - dateFrom, dateTo (YYYY-MM-DD, optional): Bornes de période. Mappés sur \`startDate\` / \`endDate\` côté API.
+  - period ('started' | 'created' | 'updated', défaut 'started'): Champ date filtré par dateFrom/dateTo
+  - typeOf (int[], optional): IDs de types d'action. Mappé sur \`actionTypes[]\` côté API. Ex: 12=Entretien visio, 19=Entretien présentiel, 13=Note, 41=Appel, 42=Email. Liste complète via \`boond_application_dictionary\` avec \`dictionaryType = setting.action\`.
   - page, pageSize: Pagination
 
-Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type | par auteur | → entité liée | extrait du texte\`. Le label de type est résolu via \`setting.typeOf.action\` (dictionnaire BoondManager, mis en cache). L'auteur et l'entité liée sont résolus via le tableau JSON:API \`included\` de la réponse.
+Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type | par auteur | → entité liée | extrait du texte\`. Le label de type est résolu via \`data.setting.action\` (dictionnaire BoondManager, scopé par entité linkable, fusionné et mis en cache). L'auteur et l'entité liée sont résolus via le tableau JSON:API \`included\` de la réponse.
 
 ℹ️ Le filtre \`period: 'created'\` cible le champ \`started\` de l'action côté API BoondManager (et non la date de création réelle en base) — limitation côté API.`,
       inputSchema: ActionSearchSchema,
@@ -303,14 +304,22 @@ Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type |
       },
     },
     async (params) => {
-      const { managerId, ...rest } = params;
+      // Several schema field names are ergonomic aliases that need translation
+      // to the actual BoondManager query parameters before the API call:
+      //   managerId  → perimeterManagers[]   (filter on action creator/responsible)
+      //   dateFrom   → startDate
+      //   dateTo     → endDate
+      //   typeOf     → actionTypes[]
+      // We strip them from `params` and re-inject under the right names so
+      // buildSearchQuery does not forward the wrong key (which the API silently
+      // ignores, leading to baseline-unfiltered results — exactly the bug we
+      // are fixing here).
+      const { managerId, dateFrom, dateTo, typeOf, ...rest } = params;
       const query = buildSearchQuery(rest);
-      if (managerId) {
-        // BoondManager expects the array form mainManagers[]=<id>. We keep
-        // the schema name singular (managerId) for ergonomic parity with the
-        // existing candidateId / resourceId / contactId / companyId filters.
-        query.mainManagers = [managerId];
-      }
+      if (managerId) query.perimeterManagers = [managerId];
+      if (dateFrom) query.startDate = dateFrom;
+      if (dateTo) query.endDate = dateTo;
+      if (typeOf && typeOf.length > 0) query.actionTypes = typeOf;
       const response = await apiRequest("/actions", "GET", undefined, query);
       return {
         content: [{ type: "text" as const, text: await formatActionsList(response) }],

@@ -33,7 +33,9 @@ export function stripHtml(input: string): string {
 
 // ---- Action type label cache ----------------------------------------------
 // The /actions list returns `typeOf` as a numeric id (e.g. 35). BoondManager
-// exposes the label table at setting.typeOf.action via the dictionary endpoint.
+// exposes the label table at setting.action via the dictionary endpoint
+// (confirmed by probing the live payload on 2026-05-20: data.setting.action
+// is the right node — neither `actionTypes` nor `setting.typeOf.action`).
 // We load it once per process the first time we need it and keep it in memory.
 // On lookup failure we cache an empty map so a transient API issue doesn't
 // cascade into a retry on every search.
@@ -41,11 +43,9 @@ export function stripHtml(input: string): string {
 let actionTypeLabels: Map<number, string> | null = null;
 let actionTypeLabelsInFlight: Promise<Map<number, string>> | null = null;
 
-// Candidate dictionary paths for action types — BoondManager exposes them
-// under `actionTypes` (top-level); we keep `setting.typeOf.action` as a
-// defensive fallback in case the schema shifts under us. The first path
-// that yields a non-empty mapping wins.
-const ACTION_TYPE_DICT_PATHS = ["actionTypes", "setting.typeOf.action"] as const;
+// Candidate dictionary paths for action types. setting.action is the real
+// path; the others are defensive fallbacks in case BoondManager renames it.
+const ACTION_TYPE_DICT_PATHS = ["setting.action", "actionTypes", "setting.typeOf.action"] as const;
 
 // Builds the id → label map from whatever shape the dictionary node has.
 // Real BoondManager payloads use `{ id, value }`, but a few endpoints have
@@ -87,29 +87,6 @@ async function loadActionTypeLabels(): Promise<Map<number, string>> {
   actionTypeLabelsInFlight = (async () => {
     try {
       const { payload } = await getDictionary();
-
-      // Temporary investigation log: the action-type dictionary node has been
-      // elusive (neither `setting.typeOf.action` nor `actionTypes` matched).
-      // Dump the keys at the relevant levels so we can see, in prod, where
-      // BoondManager actually stores them. Logged at `warn` so the default
-      // LOG_LEVEL=info picks it up. Remove once the path is confirmed.
-      const data = (payload as { data?: unknown }).data;
-      const dataKeys =
-        data && typeof data === "object" && !Array.isArray(data) ? Object.keys(data as Record<string, unknown>) : null;
-      const settingNode = data && typeof data === "object" ? (data as Record<string, unknown>).setting : undefined;
-      const settingKeys =
-        settingNode && typeof settingNode === "object" && !Array.isArray(settingNode)
-          ? Object.keys(settingNode as Record<string, unknown>)
-          : null;
-      logger.warn(
-        {
-          payloadKeys: Object.keys(payload as unknown as Record<string, unknown>),
-          dataKeys,
-          settingKeys,
-        },
-        "Dictionary structure probe (looking for action-type table)"
-      );
-
       for (const path of ACTION_TYPE_DICT_PATHS) {
         const node = resolveDictionaryPath(payload, path);
         const map = parseDictionaryNode(node);

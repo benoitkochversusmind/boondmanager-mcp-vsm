@@ -185,7 +185,9 @@ async function resolveUser(
   const provided = fromHdr || fromQs;
 
   if (!provided) {
-    res.status(401).json({ error: "Unauthorized", detail: "Bearer token or ?token= required" });
+    res.setHeader("WWW-Authenticate",
+      `Bearer realm="${MCP_BASE_URL}", resource_metadata="${MCP_BASE_URL}/.well-known/oauth-authorization-server"`);
+    res.status(401).json({ error: "unauthorized", error_description: "Authentication required" });
     return null;
   }
 

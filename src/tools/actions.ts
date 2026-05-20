@@ -87,6 +87,7 @@ async function loadActionTypeLabels(): Promise<Map<number, string>> {
   actionTypeLabelsInFlight = (async () => {
     try {
       const { payload } = await getDictionary();
+      logger.warn({ payloadKeys: Object.keys(payload as object) }, "Dictionary payload top-level keys");
       for (const path of ACTION_TYPE_DICT_PATHS) {
         const node = resolveDictionaryPath(payload, path);
         const map = parseDictionaryNode(node);

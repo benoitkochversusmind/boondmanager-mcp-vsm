@@ -88,6 +88,26 @@ async function loadActionTypeLabels(): Promise<Map<number, string>> {
     try {
       const { payload } = await getDictionary();
       logger.warn({ payloadKeys: Object.keys(payload as object) }, "Dictionary payload top-level keys");
+
+      // Targeted probe: setting.action exists in settingKeys but parses to 0
+      // entries, so its shape is not `[{id, value}]` nor a flat record. Dump
+      // a slice of the raw node + its keys/length so we can see what it is.
+      const actionNode = resolveDictionaryPath(payload, "setting.action");
+      const actionShape =
+        actionNode === undefined
+          ? "undefined"
+          : actionNode === null
+            ? "null"
+            : Array.isArray(actionNode)
+              ? `array(len=${actionNode.length})`
+              : typeof actionNode === "object"
+                ? `object(keys=${JSON.stringify(Object.keys(actionNode as object))})`
+                : typeof actionNode;
+      logger.warn(
+        { shape: actionShape, sample: JSON.stringify(actionNode)?.slice(0, 800) },
+        "setting.action shape probe"
+      );
+
       for (const path of ACTION_TYPE_DICT_PATHS) {
         const node = resolveDictionaryPath(payload, path);
         const map = parseDictionaryNode(node);

@@ -15,7 +15,14 @@ function resolveLogLevel(): pino.Level {
 /**
  * Centralized structured logger. Use this instead of console.log/error for
  * all application logging — it provides timestamps, levels, and JSON output
- * (when LOG_FORMAT=json) that plays nicely with log aggregators.
+ * that plays nicely with log aggregators.
+ *
+ * Default output is JSON (zero-dep, safe in the production container).
+ * Set LOG_FORMAT=pretty during local development to get colorized,
+ * human-readable lines via pino-pretty. pino-pretty is a devDependency
+ * and is intentionally NOT bundled into the prod image — defaulting to
+ * pretty in production would crash on startup with "unable to determine
+ * transport target for pino-pretty".
  *
  * Example:
  *   logger.info({ sessionId: "abc", userId: 123 }, "Session initialized");
@@ -23,18 +30,17 @@ function resolveLogLevel(): pino.Level {
  */
 export const logger = pino({
   level: resolveLogLevel(),
-  // Human-readable (pretty) output in dev, JSON in prod. Override via LOG_FORMAT.
   transport:
-    process.env.LOG_FORMAT === "json" || process.env.NODE_ENV === "production"
-      ? undefined
-      : {
+    process.env.LOG_FORMAT === "pretty"
+      ? {
           target: "pino-pretty",
           options: {
             colorize: true,
             translateTime: "SYS:standard",
             ignore: "pid,hostname",
           },
-        },
+        }
+      : undefined,
 });
 
 /**

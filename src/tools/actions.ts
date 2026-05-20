@@ -14,6 +14,7 @@ export function registerActionTools(server: McpServer): void {
 Args:
   - keywords (string, optional): Termes de recherche
   - candidateId, resourceId, contactId, companyId (string, optional): Filtrer par entité liée
+  - startDate, endDate (YYYY-MM-DD, optional): Bornes de période sur le champ \`started\` de l'action
   - page, pageSize: Pagination
 
 Returns: Liste des actions correspondantes.`,
@@ -84,10 +85,12 @@ Returns: Liste des actions correspondantes.`,
       const response = await apiRequest("/actions", "POST", body);
       const entity = Array.isArray(response.data) ? response.data[0] : response.data;
       return {
-        content: [{
-          type: "text" as const,
-          text: `✅ Action créée avec succès.\nID: ${entity?.id}\n\n${formatDetailResponse(response)}`,
-        }],
+        content: [
+          {
+            type: "text" as const,
+            text: `✅ Action créée avec succès.\nID: ${entity?.id}\n\n${formatDetailResponse(response)}`,
+          },
+        ],
       };
     }
   );

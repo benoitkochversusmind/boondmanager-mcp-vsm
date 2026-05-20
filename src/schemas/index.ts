@@ -635,6 +635,8 @@ export const ActionSearchSchema = z
     resourceId: z.string().optional().describe("Filtrer par ID ressource"),
     contactId: z.string().optional().describe("Filtrer par ID contact"),
     companyId: z.string().optional().describe("Filtrer par ID société"),
+    startDate: startDateField.describe("Date de début (YYYY-MM-DD) pour filtrer les actions sur leur champ `started`."),
+    endDate: endDateField.describe("Date de fin (YYYY-MM-DD) pour filtrer les actions sur leur champ `started`."),
     page: z.number().int().min(1).max(MAX_SEARCH_PAGE).default(1).describe(`Numéro de page (max: ${MAX_SEARCH_PAGE})`),
     pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).describe("Résultats par page"),
   })

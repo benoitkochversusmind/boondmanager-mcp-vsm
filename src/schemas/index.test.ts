@@ -255,6 +255,19 @@ describe("ActionSearchSchema", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("should accept startDate and endDate", () => {
+    const result = ActionSearchSchema.safeParse({
+      startDate: "2026-01-01",
+      endDate: "2026-03-31",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("should reject malformed dates", () => {
+    expect(ActionSearchSchema.safeParse({ startDate: "01/01/2026" }).success).toBe(false);
+    expect(ActionSearchSchema.safeParse({ endDate: "2026-1-1" }).success).toBe(false);
+  });
 });
 
 describe("ActionCreateSchema", () => {

@@ -44,19 +44,13 @@ import { registerWorkflowTools } from "./tools/workflows.js";
 
 const REQUIRED_ENV = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_KEYVAULT_URL"];
 REQUIRED_ENV.forEach((k) => {
-  if (!process.env[k]) {
-    console.error("Missing env var: " + k);
-    process.exit(1);
-  }
+  if (!process.env[k]) { console.error("Missing env var: " + k); process.exit(1); }
 });
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const _defaultUser = process.env.MCP_DEFAULT_USER ?? "benoit.koch@versusmind.eu";
 let _cachedBoondJwt: string = "";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// JWT PRE-CACHE — fetched once at startup via system-assigned managed identity
-// ─────────────────────────────────────────────────────────────────────────────
 (async () => {
   try {
     _cachedBoondJwt = await getBoondJwtForUser(_defaultUser);
@@ -113,12 +107,26 @@ function registerAllTools(server: McpServer): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MCP HANDLER — Streamable HTTP, stateless
-// Claude.ai sends POST requests; each is a fully independent JSON-RPC exchange.
+// AUTH — Bearer token check (MCP_API_KEY env var)
+// If MCP_API_KEY is not set, auth is disabled (dev/test only).
 // ─────────────────────────────────────────────────────────────────────────────
-async function handleMcp(req: express.Request, res: express.Response): Promise<void> {
-  const userEmail = _defaultUser;
+function checkAuth(req: express.Request, res: express.Response): boolean {
+  const apiKey = process.env.MCP_API_KEY;
+  if (!apiKey) return true; // no key configured → open (should not happen in prod)
+  const auth = req.headers["authorization"] ?? "";
+  const provided = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (provided !== apiKey) {
+    console.warn("[AUTH] Rejected request — invalid or missing Bearer token");
+    res.status(401).json({ error: "Unauthorized", detail: "Valid Bearer token required" });
+    return false;
+  }
+  return true;
+}
 
+async function handleMcp(req: express.Request, res: express.Response): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  const userEmail = _defaultUser;
   let boondJwt = _cachedBoondJwt;
   if (!boondJwt) {
     try {
@@ -136,21 +144,16 @@ async function handleMcp(req: express.Request, res: express.Response): Promise<v
   }
 
   const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless: no session persistence
+    sessionIdGenerator: undefined,
     enableJsonResponse: false,
   });
-
   const server = new McpServer({ name: "boondmanager-vsm", version: "1.0.0" });
   registerAllTools(server);
 
-  res.on("close", () => {
-    void transport.close();
-    void server.close();
-  });
+  res.on("close", () => { void transport.close(); void server.close(); });
 
   await requestContext.run({ userEmail, boondJwt }, async () => {
     await server.connect(transport);
-    // Pass req.body (already parsed by express.json) as third arg
     await transport.handleRequest(req, res, req.body);
   });
 }
@@ -163,13 +166,12 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", version: "1.0.0-vsm", jwtReady: !!_cachedBoondJwt });
 });
 
-// Support both /sse (existing Claude.ai URL) and /mcp (MCP standard path)
 app.all("/sse", handleMcp);
 app.all("/mcp", handleMcp);
 
 app.listen(PORT, () => {
   console.log("Boondmanager MCP Server (Versusmind) - Streamable HTTP - port " + PORT);
-  console.log("  Endpoint : /sse  and  /mcp");
+  console.log("  Auth     : " + (process.env.MCP_API_KEY ? "enabled (Bearer token)" : "DISABLED — set MCP_API_KEY"));
   console.log("  Tenant   : " + process.env.AZURE_TENANT_ID);
   console.log("  KV URL   : " + process.env.AZURE_KEYVAULT_URL);
 });

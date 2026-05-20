@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerActionTools, formatActionSummary } from "./actions.js";
+import { registerActionTools, formatActionSummary, stripHtml } from "./actions.js";
 
 function createMockServer() {
   return {
@@ -48,35 +48,68 @@ describe("registerActionTools", () => {
   });
 });
 
+describe("stripHtml", () => {
+  it("removes tags and decodes common entities", () => {
+    expect(stripHtml("<p>Hello&nbsp;<b>world</b></p>")).toBe("Hello world");
+    expect(stripHtml("a &lt; b &amp;&amp; c &gt; d")).toBe("a < b && c > d");
+    expect(stripHtml("L&#39;équipe")).toBe("L'équipe");
+  });
+
+  it("leaves plain text untouched", () => {
+    expect(stripHtml("Just plain text.")).toBe("Just plain text.");
+  });
+
+  it("does not decode entities outside the small allowlist", () => {
+    // &copy; isn't in the list — should remain as-is.
+    expect(stripHtml("<span>&copy; 2026</span>")).toBe("&copy; 2026");
+  });
+});
+
 describe("formatActionSummary", () => {
-  it("renders id, date, type, author, linkedTo and text", () => {
+  it("renders fields in the canonical order: id | date | typeLabel | manager | linkedTo | text", () => {
     const out = formatActionSummary({
       id: "12345",
       type: "action",
       attributes: {
-        startDate: "2026-01-15",
-        typeLabel: "Appel",
+        startDate: "2026-05-20 14:00",
+        typeLabel: "Note",
         text: "Suivi commercial après envoi de la proposition.",
-        manager: { nom: "Dupont" },
+        manager: { nom: "Jean-Yves LOISEAU" },
         linkedTo: { type: "contact", nom: "Jean Martin", id: 789 },
       },
     });
-    expect(out).toContain("[action #12345]");
-    expect(out).toContain("2026-01-15");
-    expect(out).toContain("Appel");
-    expect(out).toContain("par Dupont");
-    expect(out).toContain("→ contact Jean Martin (#789)");
-    expect(out).toContain("Suivi commercial");
+    expect(out).toBe(
+      "[action #12345] | 2026-05-20 14:00 | Note | par Jean-Yves LOISEAU | → contact Jean Martin (#789) | Suivi commercial après envoi de la proposition."
+    );
   });
 
-  it("truncates very long text and collapses whitespace", () => {
+  it("strips HTML tags and decodes entities in the text field", () => {
+    const out = formatActionSummary({
+      id: "99",
+      attributes: {
+        text: "<p>Appel&nbsp;client&nbsp;: <b>OK</b> pour la suite. L&#39;équipe valide.</p><p>&lt;urgent&gt;</p>",
+      },
+    });
+    expect(out).toContain("Appel client : OK pour la suite. L'équipe valide. <urgent>");
+    expect(out).not.toContain("&nbsp;");
+    expect(out).not.toContain("&#39;");
+    expect(out).not.toContain("<p>");
+    expect(out).not.toContain("<b>");
+  });
+
+  it("truncates very long text and collapses whitespace after stripping HTML", () => {
     const longText = "A".repeat(500);
     const out = formatActionSummary({
       id: "1",
-      attributes: { text: `prefix\n\n  ${longText}` },
+      attributes: { text: `<p>prefix</p>\n\n  ${longText}` },
     });
     expect(out).toMatch(/prefix .+…$/);
     expect(out.length).toBeLessThan(500);
+  });
+
+  it("drops the text field when stripping leaves an empty string", () => {
+    const out = formatActionSummary({ id: "5", attributes: { text: "<br/><p>&nbsp;</p>" } });
+    expect(out).toBe("[action #5]");
   });
 
   it("omits missing fields gracefully", () => {

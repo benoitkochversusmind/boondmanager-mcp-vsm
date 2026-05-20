@@ -9,6 +9,30 @@ import { buildJsonApiBody } from "./crud-factory.js";
 // note can fall back to boond_actions_get.
 const ACTION_TEXT_MAX = 300;
 
+// Action notes from BoondManager are stored as HTML (the web UI uses a rich
+// text editor), so a raw dump leaks <p>, <br>, &nbsp; etc. into the MCP output.
+// We strip tags and decode the handful of entities that actually appear in
+// practice — full HTML entity decoding would need a library, but this covers
+// the noise we see.
+const HTML_ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&gt;": ">",
+  "&lt;": "<",
+  "&nbsp;": " ",
+  "&#39;": "'",
+};
+
+export function stripHtml(input: string): string {
+  // Replace tags with a space so adjacent block tags (e.g. </p><p>) don't
+  // glue paragraphs together. The trailing whitespace collapse normalizes
+  // the runs we introduce here back to single spaces.
+  return input
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;|&gt;|&lt;|&nbsp;|&#39;/g, (m) => HTML_ENTITIES[m] ?? m)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function formatActionSummary(entity: unknown): string {
   const e = (entity ?? {}) as Record<string, unknown>;
   const id = e.id !== undefined ? String(e.id) : "?";
@@ -36,8 +60,10 @@ export function formatActionSummary(entity: unknown): string {
   }
 
   if (attrs.text) {
-    const txt = String(attrs.text).replace(/\s+/g, " ").trim();
-    parts.push(txt.length > ACTION_TEXT_MAX ? `${txt.slice(0, ACTION_TEXT_MAX)}…` : txt);
+    const txt = stripHtml(String(attrs.text));
+    if (txt) {
+      parts.push(txt.length > ACTION_TEXT_MAX ? `${txt.slice(0, ACTION_TEXT_MAX)}…` : txt);
+    }
   }
 
   return parts.join(" | ");

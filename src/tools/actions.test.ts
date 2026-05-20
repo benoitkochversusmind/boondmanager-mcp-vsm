@@ -5,6 +5,7 @@ import {
   registerActionTools,
   formatActionSummary,
   stripHtml,
+  parseDictionaryNode,
   resetActionTypeLabelsForTests,
   type ActionFormatContext,
 } from "./actions.js";
@@ -78,6 +79,41 @@ describe("ActionSearchSchema (managerId)", () => {
 
   it("still rejects unknown fields (strict mode)", () => {
     expect(ActionSearchSchema.safeParse({ mainManagers: ["36952"] }).success).toBe(false);
+  });
+});
+
+describe("parseDictionaryNode", () => {
+  it("parses { id, value } items (BoondManager canonical shape)", () => {
+    const m = parseDictionaryNode([
+      { id: 35, value: "Note" },
+      { id: 7, value: "Email" },
+    ]);
+    expect(m.get(35)).toBe("Note");
+    expect(m.get(7)).toBe("Email");
+  });
+
+  it("parses { id, label } and { id, name } fallbacks", () => {
+    expect(parseDictionaryNode([{ id: 1, label: "X" }]).get(1)).toBe("X");
+    expect(parseDictionaryNode([{ id: 2, name: "Y" }]).get(2)).toBe("Y");
+  });
+
+  it("coerces string ids to numbers", () => {
+    expect(parseDictionaryNode([{ id: "35", value: "Note" }]).get(35)).toBe("Note");
+  });
+
+  it("parses a flat record { '35': 'Note', ... }", () => {
+    expect(parseDictionaryNode({ "35": "Note", "7": "Email" }).get(35)).toBe("Note");
+  });
+
+  it("parses a record with nested label objects", () => {
+    expect(parseDictionaryNode({ "35": { value: "Note" } }).get(35)).toBe("Note");
+  });
+
+  it("returns an empty map for unusable input", () => {
+    expect(parseDictionaryNode(null).size).toBe(0);
+    expect(parseDictionaryNode(undefined).size).toBe(0);
+    expect(parseDictionaryNode("not a dict").size).toBe(0);
+    expect(parseDictionaryNode([{ id: "abc", value: "no" }]).size).toBe(0);
   });
 });
 

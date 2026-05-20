@@ -41,29 +41,66 @@ export function stripHtml(input: string): string {
 let actionTypeLabels: Map<number, string> | null = null;
 let actionTypeLabelsInFlight: Promise<Map<number, string>> | null = null;
 
+// Candidate dictionary paths for action types — BoondManager exposes them
+// under `actionTypes` (top-level); we keep `setting.typeOf.action` as a
+// defensive fallback in case the schema shifts under us. The first path
+// that yields a non-empty mapping wins.
+const ACTION_TYPE_DICT_PATHS = ["actionTypes", "setting.typeOf.action"] as const;
+
+// Builds the id → label map from whatever shape the dictionary node has.
+// Real BoondManager payloads use `{ id, value }`, but a few endpoints have
+// drifted to `{ id, label }` or `{ id, name }`, and at least one ships as
+// a plain record `{ "35": "Note", … }`. Be tolerant.
+export function parseDictionaryNode(node: unknown): Map<number, string> {
+  const out = new Map<number, string>();
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      if (!item || typeof item !== "object") continue;
+      const i = item as { id?: unknown; value?: unknown; label?: unknown; name?: unknown };
+      const numId = typeof i.id === "number" ? i.id : Number(i.id);
+      const label = i.value ?? i.label ?? i.name;
+      if (Number.isFinite(numId) && label !== undefined && label !== null) {
+        out.set(numId, String(label));
+      }
+    }
+  } else if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      const numId = Number(k);
+      if (Number.isFinite(numId) && v !== undefined && v !== null) {
+        // Object value can itself be `{ value }`, `{ label }`, or a plain string.
+        if (typeof v === "string") {
+          out.set(numId, v);
+        } else if (typeof v === "object") {
+          const o = v as { value?: unknown; label?: unknown; name?: unknown };
+          const label = o.value ?? o.label ?? o.name;
+          if (label !== undefined && label !== null) out.set(numId, String(label));
+        }
+      }
+    }
+  }
+  return out;
+}
+
 async function loadActionTypeLabels(): Promise<Map<number, string>> {
   if (actionTypeLabels) return actionTypeLabels;
   if (actionTypeLabelsInFlight) return actionTypeLabelsInFlight;
   actionTypeLabelsInFlight = (async () => {
     try {
       const { payload } = await getDictionary();
-      const node = resolveDictionaryPath(payload, "setting.typeOf.action");
-      const map = new Map<number, string>();
-      if (Array.isArray(node)) {
-        for (const item of node) {
-          if (item && typeof item === "object") {
-            const i = item as { id?: unknown; value?: unknown };
-            const numId = typeof i.id === "number" ? i.id : Number(i.id);
-            if (Number.isFinite(numId) && i.value !== undefined && i.value !== null) {
-              map.set(numId, String(i.value));
-            }
-          }
+      for (const path of ACTION_TYPE_DICT_PATHS) {
+        const node = resolveDictionaryPath(payload, path);
+        const map = parseDictionaryNode(node);
+        if (map.size > 0) {
+          logger.debug({ path, size: map.size }, "Loaded action type labels");
+          actionTypeLabels = map;
+          return map;
         }
       }
-      actionTypeLabels = map;
-      return map;
+      logger.warn({ tried: ACTION_TYPE_DICT_PATHS }, "No usable action-type dictionary found; falling back to type#N");
+      actionTypeLabels = new Map();
+      return actionTypeLabels;
     } catch (err) {
-      logger.warn({ err }, "Failed to load setting.typeOf.action; falling back to type#N");
+      logger.warn({ err }, "Failed to load action-type dictionary; falling back to type#N");
       actionTypeLabels = new Map();
       return actionTypeLabels;
     } finally {

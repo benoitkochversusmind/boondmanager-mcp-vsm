@@ -87,6 +87,29 @@ async function loadActionTypeLabels(): Promise<Map<number, string>> {
   actionTypeLabelsInFlight = (async () => {
     try {
       const { payload } = await getDictionary();
+
+      // Temporary investigation log: the action-type dictionary node has been
+      // elusive (neither `setting.typeOf.action` nor `actionTypes` matched).
+      // Dump the keys at the relevant levels so we can see, in prod, where
+      // BoondManager actually stores them. Logged at `warn` so the default
+      // LOG_LEVEL=info picks it up. Remove once the path is confirmed.
+      const data = (payload as { data?: unknown }).data;
+      const dataKeys =
+        data && typeof data === "object" && !Array.isArray(data) ? Object.keys(data as Record<string, unknown>) : null;
+      const settingNode = data && typeof data === "object" ? (data as Record<string, unknown>).setting : undefined;
+      const settingKeys =
+        settingNode && typeof settingNode === "object" && !Array.isArray(settingNode)
+          ? Object.keys(settingNode as Record<string, unknown>)
+          : null;
+      logger.warn(
+        {
+          payloadKeys: Object.keys(payload as unknown as Record<string, unknown>),
+          dataKeys,
+          settingKeys,
+        },
+        "Dictionary structure probe (looking for action-type table)"
+      );
+
       for (const path of ACTION_TYPE_DICT_PATHS) {
         const node = resolveDictionaryPath(payload, path);
         const map = parseDictionaryNode(node);

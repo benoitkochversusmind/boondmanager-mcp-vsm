@@ -255,6 +255,14 @@ app.get("/oauth/authorize", (req, res) => {
     return;
   }
 
+  // Validate client_id if provided
+  const configuredClientId = process.env.OAUTH_CLIENT_ID;
+  const incomingClientId = req.query.client_id as string;
+  if (configuredClientId && incomingClientId && incomingClientId !== configuredClientId) {
+    res.status(400).json({ error: "unauthorized_client", detail: "Unknown client_id" });
+    return;
+  }
+
   const ourState = randomBytes(20).toString("hex");
   pendingFlows.set(ourState, {
     clientRedirectUri: redirect_uri,
@@ -377,6 +385,31 @@ app.get("/oauth/callback", async (req, res) => {
 // ── Token endpoint ───────────────────────────────────────────────────────────
 app.post("/oauth/token", async (req, res) => {
   const { code, code_verifier, grant_type } = req.body as Record<string, string>;
+
+  // Validate client credentials if provided
+  const configuredClientId = process.env.OAUTH_CLIENT_ID;
+  const configuredClientSecret = process.env.OAUTH_CLIENT_SECRET;
+  const { client_id: incomingClientId, client_secret: incomingClientSecret } = req.body as Record<string, string>;
+  if (configuredClientId && incomingClientId) {
+    if (incomingClientId !== configuredClientId ||
+        (configuredClientSecret && incomingClientSecret !== configuredClientSecret)) {
+      res.status(401).json({ error: "invalid_client" });
+      return;
+    }
+  }
+
+  // client_credentials: org-level access (maps to first configured user)
+  if (grant_type === "client_credentials") {
+    const orgEmail = process.env.MCP_USER_1_EMAIL ?? "benoit.koch@versusmind.eu";
+    let boondJwt: string;
+    try { boondJwt = await getBoondJwtForUser(orgEmail); }
+    catch { res.status(503).json({ error: "temporarily_unavailable" }); return; }
+    const accessToken = `org-${randomBytes(32).toString("hex")}`;
+    oauthSessions.set(accessToken, { email: orgEmail, boondJwt, expiresAt: Date.now() + 24 * 3600_000 });
+    console.log("[OAUTH] client_credentials token issued for org user:", orgEmail);
+    res.json({ access_token: accessToken, token_type: "Bearer", expires_in: 86400, scope: "openid email" });
+    return;
+  }
 
   if (grant_type !== "authorization_code") {
     res.status(400).json({ error: "unsupported_grant_type" });

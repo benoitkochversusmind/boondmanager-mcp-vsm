@@ -6,6 +6,7 @@ import {
   formatActionSummary,
   stripHtml,
   parseDictionaryNode,
+  mergeActionDictionary,
   resetActionTypeLabelsForTests,
   type ActionFormatContext,
 } from "./actions.js";
@@ -114,6 +115,46 @@ describe("parseDictionaryNode", () => {
     expect(parseDictionaryNode(undefined).size).toBe(0);
     expect(parseDictionaryNode("not a dict").size).toBe(0);
     expect(parseDictionaryNode([{ id: "abc", value: "no" }]).size).toBe(0);
+  });
+});
+
+describe("mergeActionDictionary", () => {
+  // Mirrors the real shape captured from prod: setting.action is an object
+  // with boolean siblings (forceMultiCreation, sort) and per-entity arrays.
+  const sample = {
+    forceMultiCreation: true,
+    sort: false,
+    contact: [
+      { id: 35, isEnabled: true, value: "Prospection - autre prise de contact" },
+      { id: 2, isEnabled: true, value: "Note" },
+    ],
+    candidate: [
+      { id: 7, isEnabled: true, value: "Entretien" },
+      { id: 2, isEnabled: true, value: "Note" }, // duplicate id, same label
+    ],
+    company: [{ id: 99, value: "Revue compte" }],
+  };
+
+  it("merges per-entity arrays into a single id → label map", () => {
+    const m = mergeActionDictionary(sample);
+    expect(m.get(35)).toBe("Prospection - autre prise de contact");
+    expect(m.get(2)).toBe("Note");
+    expect(m.get(7)).toBe("Entretien");
+    expect(m.get(99)).toBe("Revue compte");
+  });
+
+  it("skips non-array sibling values (flags like forceMultiCreation / sort)", () => {
+    const m = mergeActionDictionary(sample);
+    // Sanity: no spurious string-keyed entries from the booleans.
+    expect(m.size).toBe(4);
+  });
+
+  it("returns an empty map for unusable inputs", () => {
+    expect(mergeActionDictionary(null).size).toBe(0);
+    expect(mergeActionDictionary(undefined).size).toBe(0);
+    expect(mergeActionDictionary([]).size).toBe(0); // arrays are not the right shape
+    expect(mergeActionDictionary("nope").size).toBe(0);
+    expect(mergeActionDictionary({ flagsOnly: true }).size).toBe(0);
   });
 });
 

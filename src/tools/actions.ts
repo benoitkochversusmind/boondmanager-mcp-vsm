@@ -32,20 +32,38 @@ export function stripHtml(input: string): string {
 }
 
 // ---- Action type label cache ----------------------------------------------
-// The /actions list returns `typeOf` as a numeric id (e.g. 35). BoondManager
-// exposes the label table at setting.action via the dictionary endpoint
-// (confirmed by probing the live payload on 2026-05-20: data.setting.action
-// is the right node — neither `actionTypes` nor `setting.typeOf.action`).
-// We load it once per process the first time we need it and keep it in memory.
-// On lookup failure we cache an empty map so a transient API issue doesn't
-// cascade into a retry on every search.
+// The /actions list returns `typeOf` as a numeric id (e.g. 35). The label
+// table lives at data.setting.action in the BoondManager dictionary, but its
+// shape is not a flat array — it is an object scoped per linkable entity:
+//
+//   setting.action = {
+//     forceMultiCreation: true,
+//     sort: false,
+//     contact:     [ { id: 35, value: "Prospection ...", ... }, ... ],
+//     candidate:   [ ... ],
+//     resource:    [ ... ],
+//     opportunity: [ ... ],
+//     project:     [ ... ],
+//     order:       [ ... ],
+//     invoice:     [ ... ],
+//   }
+//
+// Action-type ids are unique across the whole org; the per-entity buckets
+// are access-control views, not separate namespaces. We merge every array
+// under setting.action into one id → label map, skipping non-array siblings
+// (forceMultiCreation / sort). Confirmed empirically by probing prod on
+// 2026-05-20 — see git history for the probes that led here.
+//
+// Loaded once per process, cached for its lifetime. On failure we cache an
+// empty map so a transient API hiccup doesn't make every search retry.
 
 let actionTypeLabels: Map<number, string> | null = null;
 let actionTypeLabelsInFlight: Promise<Map<number, string>> | null = null;
 
-// Candidate dictionary paths for action types. setting.action is the real
-// path; the others are defensive fallbacks in case BoondManager renames it.
-const ACTION_TYPE_DICT_PATHS = ["setting.action", "actionTypes", "setting.typeOf.action"] as const;
+// Defensive fallback paths in case the shape above shifts and the merge
+// finds nothing. Both have been observed empty in current BoondManager
+// versions but cost nothing to try.
+const FALLBACK_DICT_PATHS = ["actionTypes", "setting.typeOf.action"] as const;
 
 // Builds the id → label map from whatever shape the dictionary node has.
 // Real BoondManager payloads use `{ id, value }`, but a few endpoints have
@@ -81,43 +99,48 @@ export function parseDictionaryNode(node: unknown): Map<number, string> {
   return out;
 }
 
+// Merges every array found under setting.action.* into a single id → label
+// map. Non-array sibling values (forceMultiCreation, sort) are skipped.
+// Exported for unit tests.
+export function mergeActionDictionary(node: unknown): Map<number, string> {
+  const map = new Map<number, string>();
+  if (!node || typeof node !== "object" || Array.isArray(node)) return map;
+  for (const value of Object.values(node as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue;
+    for (const [id, label] of parseDictionaryNode(value)) {
+      map.set(id, label);
+    }
+  }
+  return map;
+}
+
 async function loadActionTypeLabels(): Promise<Map<number, string>> {
   if (actionTypeLabels) return actionTypeLabels;
   if (actionTypeLabelsInFlight) return actionTypeLabelsInFlight;
   actionTypeLabelsInFlight = (async () => {
     try {
       const { payload } = await getDictionary();
-      logger.warn({ payloadKeys: Object.keys(payload as object) }, "Dictionary payload top-level keys");
 
-      // Targeted probe: setting.action exists in settingKeys but parses to 0
-      // entries, so its shape is not `[{id, value}]` nor a flat record. Dump
-      // a slice of the raw node + its keys/length so we can see what it is.
-      const actionNode = resolveDictionaryPath(payload, "setting.action");
-      const actionShape =
-        actionNode === undefined
-          ? "undefined"
-          : actionNode === null
-            ? "null"
-            : Array.isArray(actionNode)
-              ? `array(len=${actionNode.length})`
-              : typeof actionNode === "object"
-                ? `object(keys=${JSON.stringify(Object.keys(actionNode as object))})`
-                : typeof actionNode;
-      logger.warn(
-        { shape: actionShape, sample: JSON.stringify(actionNode)?.slice(0, 800) },
-        "setting.action shape probe"
-      );
+      // Primary path — the per-entity scoped object at setting.action.
+      const settingAction = resolveDictionaryPath(payload, "setting.action");
+      const merged = mergeActionDictionary(settingAction);
+      if (merged.size > 0) {
+        logger.debug({ size: merged.size }, "Loaded action type labels from setting.action");
+        actionTypeLabels = merged;
+        return merged;
+      }
 
-      for (const path of ACTION_TYPE_DICT_PATHS) {
-        const node = resolveDictionaryPath(payload, path);
-        const map = parseDictionaryNode(node);
-        if (map.size > 0) {
-          logger.debug({ path, size: map.size }, "Loaded action type labels");
-          actionTypeLabels = map;
-          return map;
+      // Defensive fallbacks for future-proofing if the shape changes.
+      for (const path of FALLBACK_DICT_PATHS) {
+        const fallback = parseDictionaryNode(resolveDictionaryPath(payload, path));
+        if (fallback.size > 0) {
+          logger.debug({ path, size: fallback.size }, "Loaded action type labels (fallback path)");
+          actionTypeLabels = fallback;
+          return fallback;
         }
       }
-      logger.warn({ tried: ACTION_TYPE_DICT_PATHS }, "No usable action-type dictionary found; falling back to type#N");
+
+      logger.warn("No usable action-type dictionary found; falling back to type#N");
       actionTypeLabels = new Map();
       return actionTypeLabels;
     } catch (err) {

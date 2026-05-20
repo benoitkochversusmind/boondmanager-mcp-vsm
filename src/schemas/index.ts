@@ -635,8 +635,22 @@ export const ActionSearchSchema = z
     resourceId: z.string().optional().describe("Filtrer par ID ressource"),
     contactId: z.string().optional().describe("Filtrer par ID contact"),
     companyId: z.string().optional().describe("Filtrer par ID société"),
-    startDate: startDateField.describe("Date de début (YYYY-MM-DD) pour filtrer les actions sur leur champ `started`."),
-    endDate: endDateField.describe("Date de fin (YYYY-MM-DD) pour filtrer les actions sur leur champ `started`."),
+    dateFrom: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe("Borne inférieure de période (YYYY-MM-DD). Combiner avec `period` pour choisir le champ filtré."),
+    dateTo: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe("Borne supérieure de période (YYYY-MM-DD). Combiner avec `period` pour choisir le champ filtré."),
+    period: z
+      .enum(["started", "created", "updated"])
+      .default("started")
+      .describe(
+        "Champ date filtré par `dateFrom` / `dateTo`. 'started' = date de l'action, 'created' = création, 'updated' = dernière modification. Défaut: 'started'."
+      ),
     page: z.number().int().min(1).max(MAX_SEARCH_PAGE).default(1).describe(`Numéro de page (max: ${MAX_SEARCH_PAGE})`),
     pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).describe("Résultats par page"),
   })

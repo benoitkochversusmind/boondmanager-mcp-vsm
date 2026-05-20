@@ -241,9 +241,10 @@ describe("OpportunityUpdateSchema", () => {
 });
 
 describe("ActionSearchSchema", () => {
-  it("should accept empty search", () => {
+  it("should accept empty search and default period to 'started'", () => {
     const result = ActionSearchSchema.parse({});
     expect(result.page).toBe(1);
+    expect(result.period).toBe("started");
   });
 
   it("should accept filters", () => {
@@ -256,17 +257,31 @@ describe("ActionSearchSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should accept startDate and endDate", () => {
+  it("should accept dateFrom and dateTo", () => {
     const result = ActionSearchSchema.safeParse({
-      startDate: "2026-01-01",
-      endDate: "2026-03-31",
+      dateFrom: "2026-01-01",
+      dateTo: "2026-03-31",
     });
     expect(result.success).toBe(true);
   });
 
+  it("should accept period override", () => {
+    const result = ActionSearchSchema.parse({ period: "updated" });
+    expect(result.period).toBe("updated");
+  });
+
+  it("should reject unknown period values", () => {
+    expect(ActionSearchSchema.safeParse({ period: "closed" }).success).toBe(false);
+  });
+
   it("should reject malformed dates", () => {
-    expect(ActionSearchSchema.safeParse({ startDate: "01/01/2026" }).success).toBe(false);
-    expect(ActionSearchSchema.safeParse({ endDate: "2026-1-1" }).success).toBe(false);
+    expect(ActionSearchSchema.safeParse({ dateFrom: "01/01/2026" }).success).toBe(false);
+    expect(ActionSearchSchema.safeParse({ dateTo: "2026-1-1" }).success).toBe(false);
+  });
+
+  it("should reject the old startDate/endDate names (strict mode)", () => {
+    expect(ActionSearchSchema.safeParse({ startDate: "2026-01-01" }).success).toBe(false);
+    expect(ActionSearchSchema.safeParse({ endDate: "2026-01-01" }).success).toBe(false);
   });
 });
 

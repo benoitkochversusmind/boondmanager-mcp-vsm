@@ -14,7 +14,8 @@ export function registerActionTools(server: McpServer): void {
 Args:
   - keywords (string, optional): Termes de recherche
   - candidateId, resourceId, contactId, companyId (string, optional): Filtrer par entité liée
-  - startDate, endDate (YYYY-MM-DD, optional): Bornes de période sur le champ \`started\` de l'action
+  - dateFrom, dateTo (YYYY-MM-DD, optional): Bornes de période
+  - period ('started' | 'created' | 'updated', défaut 'started'): Champ date sur lequel s'appliquent dateFrom/dateTo
   - page, pageSize: Pagination
 
 Returns: Liste des actions correspondantes.`,

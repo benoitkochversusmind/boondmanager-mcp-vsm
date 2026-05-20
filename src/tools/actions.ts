@@ -1,7 +1,64 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ActionSearchSchema, ActionCreateSchema, IdSchema } from "../schemas/index.js";
-import { apiRequest, buildSearchQuery, formatListResponse, formatDetailResponse } from "../services/boond-client.js";
+import { apiRequest, buildSearchQuery, formatDetailResponse } from "../services/boond-client.js";
+import { CHARACTER_LIMIT } from "../constants.js";
 import { buildJsonApiBody } from "./crud-factory.js";
+
+// Per-action soft cap on the `text` field. Action notes can be paragraphs;
+// the list view stays readable if we trim each one. Callers needing the full
+// note can fall back to boond_actions_get.
+const ACTION_TEXT_MAX = 300;
+
+export function formatActionSummary(entity: unknown): string {
+  const e = (entity ?? {}) as Record<string, unknown>;
+  const id = e.id !== undefined ? String(e.id) : "?";
+  const attrs = (e.attributes ?? {}) as Record<string, unknown>;
+  const parts: string[] = [`[action #${id}]`];
+
+  if (attrs.startDate) parts.push(String(attrs.startDate));
+  if (attrs.typeLabel) parts.push(String(attrs.typeLabel));
+
+  const manager = attrs.manager;
+  if (manager && typeof manager === "object") {
+    const mgr = manager as Record<string, unknown>;
+    if (mgr.nom) parts.push(`par ${String(mgr.nom)}`);
+  }
+
+  const linked = attrs.linkedTo;
+  if (linked && typeof linked === "object") {
+    const lk = linked as Record<string, unknown>;
+    const t = lk.type ? String(lk.type) : "";
+    const n = lk.nom ? String(lk.nom) : "";
+    const lid = lk.id !== undefined ? String(lk.id) : "";
+    const label = [t, n].filter(Boolean).join(" ");
+    const tail = lid ? `${label} (#${lid})`.trim() : label;
+    if (tail) parts.push(`→ ${tail}`);
+  }
+
+  if (attrs.text) {
+    const txt = String(attrs.text).replace(/\s+/g, " ").trim();
+    parts.push(txt.length > ACTION_TEXT_MAX ? `${txt.slice(0, ACTION_TEXT_MAX)}…` : txt);
+  }
+
+  return parts.join(" | ");
+}
+
+function formatActionsList(response: { data: unknown; meta?: { totals?: { rows?: number } } }): string {
+  const data = Array.isArray(response.data) ? response.data : [response.data];
+  if (data.length === 0 || (data.length === 1 && !data[0])) {
+    return "Aucun(e) action trouvé(e).";
+  }
+  const total = response.meta?.totals?.rows;
+  const lines = data.map((item) => formatActionSummary(item));
+  let result = lines.join("\n");
+  if (total !== undefined) {
+    result = `Total: ${total} action(s)\n\n${result}`;
+  }
+  if (result.length > CHARACTER_LIMIT) {
+    result = result.substring(0, CHARACTER_LIMIT) + "\n\n[Résultats tronqués...]";
+  }
+  return result;
+}
 
 export function registerActionTools(server: McpServer): void {
   // Search actions
@@ -31,7 +88,7 @@ Returns: Liste des actions correspondantes.`,
       const query = buildSearchQuery(params);
       const response = await apiRequest("/actions", "GET", undefined, query);
       return {
-        content: [{ type: "text" as const, text: formatListResponse(response, "action") }],
+        content: [{ type: "text" as const, text: formatActionsList(response) }],
       };
     }
   );

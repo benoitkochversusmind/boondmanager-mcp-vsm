@@ -169,13 +169,15 @@ export function registerInvoiceTools(server: McpServer): void {
 
 // ---- Composite tool: overdue invoices ----
 
-const OVERDUE_DESCRIPTION = `Liste les factures en retard de paiement (impayées + \`dueDate\` < \`asOfDate\`), filtrables par pôle, manager, agence, BU, société et fourchette de montant HT.
+const OVERDUE_DESCRIPTION = `Liste les factures en retard de paiement (impayées + date d'échéance dépassée), filtrables par pôle, manager, agence, BU, société et fourchette de montant HT.
+
+**Date pivot** : on prend \`expectedPaymentDate\` (date de règlement prévu) si elle est renseignée, sinon \`dueDate\` (échéance contractuelle). Ces deux champs ne sont pas synonymes dans BoondManager — selon les usages comptables, l'un OU l'autre est rempli. Le tool fait le fallback automatiquement et indique dans la sortie quel champ a été utilisé pour chaque ligne.
 
 Un seul appel orchestre :
 1. Récupération du dictionnaire \`setting.state.invoice\` pour identifier les états « payée / annulée » à exclure.
-2. Recherche \`/invoices\` avec les filtres de périmètre + \`states\` (exclusion des payées/annulées) + tri \`dueDate asc\`.
+2. Recherche \`/invoices\` avec les filtres de périmètre + \`states\` (exclusion des payées/annulées).
 3. Pagination jusqu'à \`maxPages\` (défaut 5 × \`pageSize\` 500 = 2500 factures scannées).
-4. Filtre côté serveur : \`dueDate < asOfDate\` (défaut = aujourd'hui) + bornes \`amountMin/MaxExcludingTax\`.
+4. Filtre côté serveur : effectiveDate (= \`expectedPaymentDate ?? dueDate\`) strictement antérieure à \`asOfDate\` (défaut = aujourd'hui) + bornes \`amountMin/MaxExcludingTax\`.
 5. Sortie triée par jours de retard décroissants (ou groupée par société si \`groupByCompany: true\`).
 
 Paramètres clés :
@@ -192,12 +194,15 @@ interface InvoiceStateRef {
   value: string;
 }
 
+type DateField = "expectedPaymentDate" | "dueDate";
+
 interface OverdueRow {
   invoiceId: string;
   reference: string;
   companyId: string | null;
   companyName: string | null;
-  dueDate: string;
+  effectiveDate: string;
+  dateField: DateField;
   daysOverdue: number;
   amountExcludingTax: number;
   stateId: number | null;
@@ -273,10 +278,12 @@ export async function fetchOverdueInvoices(params: InvoiceOverdueInput): Promise
   const unpaidStateIds = pickUnpaidStateIds(invoiceStates);
   const stateLabelById = new Map(invoiceStates.map((s) => [s.id, s.value]));
 
+  // No explicit sort: BoondManager's default ordering covers both expectedPaymentDate
+  // and dueDate populations, and we post-sort client-side by daysOverdue anyway.
+  // Forcing `sort: "dueDate"` previously caused records with only expectedPaymentDate
+  // populated to land at the end of the result set and risk being cut off by maxPages.
   const baseQuery: Record<string, unknown> = {
     maxResults: params.pageSize,
-    sort: "dueDate",
-    order: "asc",
   };
   if (unpaidStateIds.length) baseQuery["states"] = unpaidStateIds;
   if (params.companyId) baseQuery["companyId"] = params.companyId;
@@ -303,10 +310,19 @@ export async function fetchOverdueInvoices(params: InvoiceOverdueInput): Promise
 
     for (const inv of data) {
       const a = (inv.attributes ?? {}) as Record<string, unknown>;
-      const due = typeof a["dueDate"] === "string" ? (a["dueDate"] as string) : null;
-      if (!due) continue;
-      const dueMs = Date.parse(`${due}T00:00:00Z`);
-      if (!Number.isFinite(dueMs) || dueMs >= asOfMs) continue;
+      // `expectedPaymentDate` (date de règlement prévu, saisie comptable) prend le pas
+      // sur `dueDate` (échéance contractuelle, parfois calculée automatiquement) parce
+      // qu'en pratique chez les ESN françaises seule l'une des deux est renseignée par
+      // facture, et c'est expectedPaymentDate qui sert à piloter le recouvrement.
+      const expectedPaymentRaw = a["expectedPaymentDate"];
+      const dueDateRaw = a["dueDate"];
+      const expectedPaymentDate = typeof expectedPaymentRaw === "string" ? expectedPaymentRaw : null;
+      const dueDate = typeof dueDateRaw === "string" ? dueDateRaw : null;
+      const effectiveDate = expectedPaymentDate ?? dueDate;
+      if (!effectiveDate) continue;
+      const dateField: DateField = expectedPaymentDate ? "expectedPaymentDate" : "dueDate";
+      const effectiveMs = Date.parse(`${effectiveDate}T00:00:00Z`);
+      if (!Number.isFinite(effectiveMs) || effectiveMs >= asOfMs) continue;
 
       const amount = Number(a["amountExcludingTax"] ?? a["turnover"] ?? 0);
       if (params.amountMinExcludingTax !== undefined && amount < params.amountMinExcludingTax) continue;
@@ -320,8 +336,9 @@ export async function fetchOverdueInvoices(params: InvoiceOverdueInput): Promise
         reference: typeof a["reference"] === "string" ? (a["reference"] as string) : "(sans réf)",
         companyId,
         companyName: companyId ? (companyNames.get(companyId) ?? null) : null,
-        dueDate: due,
-        daysOverdue: diffDays(dueMs, asOfMs),
+        effectiveDate,
+        dateField,
+        daysOverdue: diffDays(effectiveMs, asOfMs),
         amountExcludingTax: amount,
         stateId: Number.isFinite(stateId) ? stateId : null,
         stateLabel: Number.isFinite(stateId) ? (stateLabelById.get(stateId) ?? null) : null,
@@ -369,7 +386,8 @@ function formatOverdueOutput(rows: OverdueRow[], scanned: number, asOfDate: stri
   const lines = rows.map((r) => {
     const companyDisplay = r.companyName ?? (r.companyId ? `société #${r.companyId}` : "société inconnue");
     const stateDisplay = r.stateLabel ?? (r.stateId !== null ? `état #${r.stateId}` : "état ?");
-    return `[invoice #${r.invoiceId}] ${r.reference} | ${companyDisplay} | échéance ${r.dueDate} (${r.daysOverdue}j retard) | ${r.amountExcludingTax.toFixed(2)} € HT | ${stateDisplay}`;
+    const dateLabel = r.dateField === "expectedPaymentDate" ? "règlement prévu" : "échéance";
+    return `[invoice #${r.invoiceId}] ${r.reference} | ${companyDisplay} | ${dateLabel} ${r.effectiveDate} (${r.daysOverdue}j retard) | ${r.amountExcludingTax.toFixed(2)} € HT | ${stateDisplay}`;
   });
 
   return `${header}\n\n${lines.join("\n")}`;

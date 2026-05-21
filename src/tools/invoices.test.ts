@@ -30,7 +30,13 @@ const INVOICE_STATE_DICT = {
 
 function invoice(
   id: string,
-  attrs: { dueDate?: string; amountExcludingTax?: number; state?: number; reference?: string },
+  attrs: {
+    dueDate?: string;
+    expectedPaymentDate?: string;
+    amountExcludingTax?: number;
+    state?: number;
+    reference?: string;
+  },
   companyId?: string
 ) {
   return {
@@ -39,6 +45,7 @@ function invoice(
     attributes: {
       reference: attrs.reference ?? `INV-${id}`,
       dueDate: attrs.dueDate,
+      expectedPaymentDate: attrs.expectedPaymentDate,
       amountExcludingTax: attrs.amountExcludingTax ?? 0,
       state: attrs.state ?? 2,
     },
@@ -127,8 +134,49 @@ describe("fetchOverdueInvoices", () => {
     expect(invoicesCall).toBeDefined();
     const queryParams = invoicesCall![3] as Record<string, unknown>;
     expect(queryParams["states"]).toEqual([1, 2, 3, 6]);
-    expect(queryParams["sort"]).toBe("dueDate");
-    expect(queryParams["order"]).toBe("asc");
+    // No explicit sort: we rely on BoondManager's default ordering so invoices using
+    // expectedPaymentDate aren't pushed past the maxPages window.
+    expect(queryParams["sort"]).toBeUndefined();
+    expect(queryParams["order"]).toBeUndefined();
+  });
+
+  it("uses expectedPaymentDate when populated, falling back to dueDate otherwise", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      return {
+        data: [
+          // Only expectedPaymentDate → must be picked up (regression for v1.9.0 bug)
+          invoice("500", { expectedPaymentDate: "2026-03-10", amountExcludingTax: 1000 }, "50"),
+          // Only dueDate → still works
+          invoice("501", { dueDate: "2026-02-01", amountExcludingTax: 2000 }, "51"),
+          // Both fields set → expectedPaymentDate wins
+          invoice("502", { expectedPaymentDate: "2026-04-01", dueDate: "2026-01-01", amountExcludingTax: 3000 }, "52"),
+          // Neither field → dropped
+          invoice("503", { amountExcludingTax: 4000 }, "53"),
+          // expectedPaymentDate is future → dropped (not overdue)
+          invoice("504", { expectedPaymentDate: "2026-09-01", amountExcludingTax: 5000 }, "54"),
+        ],
+      };
+    });
+
+    const { rows } = await fetchOverdueInvoices({
+      asOfDate: "2026-05-01",
+      pageSize: 500,
+      maxPages: 5,
+    });
+
+    const byId = new Map(rows.map((r) => [r.invoiceId, r]));
+    expect([...byId.keys()].sort()).toEqual(["500", "501", "502"]);
+
+    // expectedPaymentDate was used for 500 (only that field) and 502 (both set)
+    expect(byId.get("500")!.dateField).toBe("expectedPaymentDate");
+    expect(byId.get("500")!.effectiveDate).toBe("2026-03-10");
+    expect(byId.get("502")!.dateField).toBe("expectedPaymentDate");
+    expect(byId.get("502")!.effectiveDate).toBe("2026-04-01"); // not 2026-01-01 (dueDate)
+
+    // dueDate is the fallback for 501
+    expect(byId.get("501")!.dateField).toBe("dueDate");
+    expect(byId.get("501")!.effectiveDate).toBe("2026-02-01");
   });
 
   it("applies amount range filtering and perimeter filters", async () => {

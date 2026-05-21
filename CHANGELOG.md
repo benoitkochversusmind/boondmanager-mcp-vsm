@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.9.1] - 2026-05-21
+
+Correction de bug sur `boond_invoices_overdue` : le tool filtrait uniquement sur le champ `dueDate` de l'API BoondManager (échéance contractuelle, parfois calculée automatiquement). Mais en pratique, sur les factures Versusmind, c'est `expectedPaymentDate` (date de règlement prévu, saisie comptable) qui est renseigné. Résultat : le tool passait à côté de toutes les factures n'utilisant que `expectedPaymentDate` et renvoyait une liste vide à tort.
+
+### Corrigé
+
+- **Fallback `expectedPaymentDate` → `dueDate`** (`src/tools/invoices.ts`) — `fetchOverdueInvoices` calcule désormais une `effectiveDate = expectedPaymentDate ?? dueDate` pour chaque facture, puis applique le filtre `effectiveDate < asOfDate`. Les factures où ni l'un ni l'autre n'est rempli sont ignorées (comportement précédent préservé). La sortie indique quel champ a été utilisé (« règlement prévu » vs « échéance ») pour chaque ligne. L'`OverdueRow` interne change de `dueDate: string` à `{ effectiveDate, dateField: "expectedPaymentDate" | "dueDate" }`.
+- **Suppression du `sort: dueDate asc` côté serveur** — il ordonnait les résultats en plaçant les factures sans `dueDate` (avec uniquement `expectedPaymentDate`) en fin de result set, risquant de les couper par `maxPages`. On laisse désormais BoondManager appliquer son ordre par défaut ; le tri définitif (`daysOverdue` décroissant) reste côté serveur MCP.
+
+### Tests
+
+- **+1 test** dans `src/tools/invoices.test.ts` (`uses expectedPaymentDate when populated, falling back to dueDate otherwise`) qui pinne le contrat avec 5 cas : `expectedPaymentDate` seul, `dueDate` seul, les deux (expectedPaymentDate gagne), aucun (drop), date future (drop). Le test existant sur le tri server-side est mis à jour pour vérifier qu'on n'envoie plus `sort`/`order`. **469 tests passants** (vs 468 en 1.9.0).
+
 ## [1.9.0] - 2026-05-21
 
 Nouvel outil composite **`boond_invoices_overdue`** dédié à l'identification des factures en retard de paiement, plus extension de la surface de filtres du search facture (états + périmètre). Cible la demande Versusmind : "lister les factures en retard, filtrables par pôle / manager / client / montant".

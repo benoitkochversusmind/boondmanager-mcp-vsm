@@ -3,6 +3,29 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.9.5] - 2026-05-21
+
+Inspection directe de `GET /orders/2325` via le MCP en prod : l'ordre BoondManager **n'a pas de relation `company`** — uniquement `mainManager` (commercial) et `project`. La chaîne réelle est donc à 3 niveaux : invoice → order → project → company. v1.9.4 s'arrêtait à `/orders/{id}` et trouvait null. Cette version étend le second pass.
+
+### Corrigé
+
+- **Bug 2b (v3) — chaîne complète invoice → order → project → company** dans `resolveCompaniesViaOrders` (`src/tools/invoices.ts`) :
+  1. `GET /orders/{orderId}` (sans include) → lire `relationships.project.data.id`. Le code teste d'abord une relation `company` directe sur l'ordre (défensif pour d'autres instances), puis tombe sur `project`.
+  2. Pour chaque `projectId` distinct récolté à l'étape 1 : `GET /projects/{id}?include=company` → lire `relationships.company.data.id` + nom depuis `included[]`.
+  3. Dédup à chaque niveau (plusieurs factures sur même ordre → 1 fetch ordre ; plusieurs ordres sur même projet → 1 fetch projet) — gain de latence sensible quand l'ESN bille un même projet en plusieurs jalons.
+- Cap maintenu à 100 ordres uniques au niveau de l'étape 1 ; les ordres en surplus se voient affichés en `order #<id> (driller)` avec la note `boond_orders_get` / `boond_projects_get`.
+- Court-circuit défensif : si l'ordre expose un champ inline `companyName` (certaines instances le font), on saute l'étape 2.
+- Description du tool `boond_invoices_overdue` resserrée pour rester sous la limite de 2000 caractères (testée en CI via `descriptions.test.ts`).
+
+### Tests
+
+`src/tools/invoices.test.ts` : tests refactorés autour de la nouvelle signature `order(id, projectId, companyId?)` et d'un nouveau helper `project(id, companyId)`. Tests clés :
+- `resolves company via the full invoice → order → project → company chain` — pinne le pipeline canonique avec les 4 fetches attendus (`/orders/2325`, `/orders/2326`, `/projects/1808`, `/projects/1809`).
+- `uses the defensive 'order has company directly' short-circuit when available` — vérifie qu'on n'appelle pas `/projects/` quand l'ordre porte déjà la company.
+- `dedupes both orderIds and projectIds in the chain` — 3 factures → 2 orders distincts + 1 projet partagé → exactement 2 fetches orders + 1 fetch projet.
+- Cap test mis à jour : 150 ordres uniques → 100 fetches `/orders/` + 1 fetch `/projects/` (cap appliqué au niveau ordre).
+- **483 tests passants** (vs 483 en 1.9.4, count identique car refactor + 1 nouveau test pour le short-circuit, - 1 ancien test).
+
 ## [1.9.4] - 2026-05-21
 
 BoondManager n'honore pas le nested include `order.company` sur `/invoices` (testé en prod sur la révision 0000039) — l'order est bien embarqué dans `included[]`, mais sa propre relation `company` n'est pas suivie. Conséquence : v1.9.3 affichait `société #<id>` ou `société inconnue`. Cette version résout via un second passage explicite.

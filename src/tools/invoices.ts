@@ -138,62 +138,136 @@ function resolveCompany(
 }
 
 /**
- * Second-pass company resolution: for each unique orderId, do a follow-up
- * `GET /orders/{id}?include=company` to retrieve the linked company.
+ * Second-pass company resolution: walks the **invoice → order → project →
+ * company** chain to find the client name for each unique orderId.
  *
- * The nested `?include=order.company` syntax isn't honored by BoondManager
- * on `/invoices` (observed on the VSM instance 2026-05-21), so this explicit
- * round-trip is necessary. We cap the number of lookups to avoid runaway
- * latency on very large batches — beyond `maxLookups` unique orders, callers
- * should narrow the perimeter instead.
+ * Why a chain: on the VSM BoondManager instance (verified 2026-05-21 via
+ * direct probing of `/orders/2325`), the order resource has NO `company`
+ * relationship — only `mainManager` (the commercial) and `project`. The
+ * company is actually linked to the project. So we do:
  *
- * Parallelism is bounded naturally by the BoondManager rate limiter
- * (`src/services/rate-limiter.ts`). Individual failures are swallowed so a
- * single bad order doesn't fail the whole batch.
+ *   1. `GET /orders/{orderId}` → read `relationships.project.data.id`
+ *      (deduped per unique orderId)
+ *   2. `GET /projects/{projectId}?include=company` → read
+ *      `relationships.company.data.id` and the company's name from
+ *      `included[]` (deduped per unique projectId; many invoices can share
+ *      the same project)
+ *
+ * Defensive: if any step finds the company name inline (some instances
+ * expose it on order/project attributes, or as a direct relationship),
+ * we short-circuit rather than chain further. Nested includes are NOT
+ * used because BoondManager doesn't honor them on these endpoints.
+ *
+ * Cap: `maxLookups` bounds the number of unique orders we will probe; the
+ * project step then dedupes orders that share a project, so the actual
+ * number of HTTP calls is closer to `unique_orders + unique_projects`.
+ *
+ * Parallelism is bounded by the BoondManager rate limiter
+ * (`src/services/rate-limiter.ts`). `Promise.allSettled` tolerates per-row
+ * failures.
  */
 export async function resolveCompaniesViaOrders(
   orderIds: ReadonlyArray<string>,
   maxLookups = 100
 ): Promise<Map<string, { id: string | null; name: string | null }>> {
   const cache = new Map<string, { id: string | null; name: string | null }>();
-  const unique = Array.from(new Set(orderIds)).slice(0, maxLookups);
-  const results = await Promise.allSettled(
-    unique.map(async (orderId) => {
-      const resp = await apiRequest(`/orders/${orderId}`, "GET", undefined, { include: "company" });
+  const uniqueOrderIds = Array.from(new Set(orderIds)).slice(0, maxLookups);
+  if (uniqueOrderIds.length === 0) return cache;
+
+  // Step 1: fetch each unique order. Two outcomes per order:
+  //   - direct company resolved on the order itself (rare/defensive, e.g. via
+  //     attributes.companyName or a `company` relationship in other instances)
+  //   - otherwise, the order's `project` relationship gives us a projectId
+  //     to follow in step 2.
+  type Step1Info =
+    | { kind: "direct"; companyId: string | null; companyName: string | null }
+    | { kind: "viaProject"; projectId: string };
+  const step1: Map<string, Step1Info> = new Map();
+  const step1Results = await Promise.allSettled(
+    uniqueOrderIds.map(async (orderId) => {
+      const resp = await apiRequest(`/orders/${orderId}`);
       const entity = Array.isArray(resp.data) ? resp.data[0] : resp.data;
-      if (!entity) return [orderId, { id: null, name: null }] as const;
-      const orderRels = (entity.relationships ?? {}) as Record<string, unknown>;
-      // The order's company can appear under any of the defensive names.
-      let companyId: string | null = null;
+      if (!entity) return [orderId, null] as const;
+      const rels = (entity.relationships ?? {}) as Record<string, unknown>;
+      const attrs = (entity.attributes ?? {}) as Record<string, unknown>;
+
+      // Defensive: direct company on order (other instances may have it).
       for (const name of COMPANY_REL_NAMES) {
-        const ref = relRef(orderRels[name]);
+        const ref = relRef(rels[name]);
         if (ref) {
-          companyId = ref.id;
-          break;
+          const inlineName = readString(attrs, ["companyName", "company"]);
+          return [orderId, { kind: "direct", companyId: ref.id, companyName: inlineName }] as const;
         }
       }
-      // If the response embeds a company resource in `included[]`, surface its name.
-      const idx = buildIncludedIndex(resp);
-      let companyName: string | null = null;
-      if (companyId) {
-        const full = idx.get(`company:${companyId}`);
-        if (full) {
-          companyName = readString((full.attributes ?? {}) as Record<string, unknown>, ["name", "title"]);
-        }
+      // Inline-only fallback: company name on order attrs without relationship.
+      const inlineName = readString(attrs, ["companyName"]);
+      if (inlineName) {
+        return [orderId, { kind: "direct", companyId: null, companyName: inlineName }] as const;
       }
-      // Some BoondManager instances inline the company name on the order
-      // attributes (e.g. `attributes.company` as a string). Try that too.
-      if (!companyName) {
-        const orderAttrs = (entity.attributes ?? {}) as Record<string, unknown>;
-        companyName = readString(orderAttrs, ["companyName", "company"]);
+      // Canonical chain: go through project.
+      const projectRef = relRef(rels["project"]);
+      if (projectRef) {
+        return [orderId, { kind: "viaProject", projectId: projectRef.id }] as const;
       }
-      return [orderId, { id: companyId, name: companyName }] as const;
+      return [orderId, null] as const;
     })
   );
-  for (const r of results) {
-    if (r.status === "fulfilled") {
-      const [orderId, info] = r.value;
-      cache.set(orderId, info);
+  for (const r of step1Results) {
+    if (r.status !== "fulfilled") continue;
+    const [orderId, info] = r.value;
+    if (info) step1.set(orderId, info);
+  }
+
+  // Step 2: for every distinct projectId surfaced in step 1, fetch the project
+  // with `include=company` to retrieve the company id + name in one call.
+  const uniqueProjectIds = Array.from(
+    new Set(
+      Array.from(step1.values())
+        .filter((i): i is { kind: "viaProject"; projectId: string } => i.kind === "viaProject")
+        .map((i) => i.projectId)
+    )
+  );
+  const projectToCompany = new Map<string, { id: string | null; name: string | null }>();
+  if (uniqueProjectIds.length > 0) {
+    const step2Results = await Promise.allSettled(
+      uniqueProjectIds.map(async (projectId) => {
+        const resp = await apiRequest(`/projects/${projectId}`, "GET", undefined, { include: "company" });
+        const entity = Array.isArray(resp.data) ? resp.data[0] : resp.data;
+        if (!entity) return [projectId, null] as const;
+        const projRels = (entity.relationships ?? {}) as Record<string, unknown>;
+        let companyId: string | null = null;
+        for (const name of COMPANY_REL_NAMES) {
+          const ref = relRef(projRels[name]);
+          if (ref) {
+            companyId = ref.id;
+            break;
+          }
+        }
+        if (!companyId) {
+          const inlineName = readString((entity.attributes ?? {}) as Record<string, unknown>, ["companyName"]);
+          if (inlineName) return [projectId, { id: null, name: inlineName }] as const;
+          return [projectId, null] as const;
+        }
+        const idx = buildIncludedIndex(resp);
+        const full = idx.get(`company:${companyId}`);
+        const name = full ? readString((full.attributes ?? {}) as Record<string, unknown>, ["name", "title"]) : null;
+        return [projectId, { id: companyId, name }] as const;
+      })
+    );
+    for (const r of step2Results) {
+      if (r.status !== "fulfilled") continue;
+      const [projectId, info] = r.value;
+      if (info) projectToCompany.set(projectId, info);
+    }
+  }
+
+  // Assemble the orderId → company cache from both code paths.
+  for (const [orderId, info] of step1) {
+    if (info.kind === "direct") {
+      cache.set(orderId, { id: info.companyId, name: info.companyName });
+    } else {
+      const company = projectToCompany.get(info.projectId);
+      if (company) cache.set(orderId, company);
     }
   }
   return cache;
@@ -501,25 +575,23 @@ export function registerInvoiceTools(server: McpServer): void {
 
 // ---- Composite tool: overdue invoices -------------------------------------
 
-const OVERDUE_DESCRIPTION = `Liste les factures en retard de paiement (impayées + \`expectedPaymentDate\` strictement antérieure à \`asOfDate\`), filtrables par pôle, manager, agence, BU, société et fourchette de montant HT.
+const OVERDUE_DESCRIPTION = `Liste les factures en retard de paiement, filtrables par pôle, manager, agence, BU, société et fourchette de montant HT.
 
-**Date pivot** : on filtre **uniquement** sur \`expectedPaymentDate\` (date de règlement prévu, saisie comptable). Le champ \`dueDate\` (échéance contractuelle, parfois auto-calculé) n'est pas utilisé — il n'est pas systématiquement rempli dans BoondManager. Les factures sans \`expectedPaymentDate\` sont donc ignorées.
+**Date pivot** : filtrage strict sur \`expectedPaymentDate\` (« Date de règlement prévu », saisie comptable). \`dueDate\` n'est pas utilisé — il n'est pas systématiquement rempli dans BoondManager. Les factures sans \`expectedPaymentDate\` sont ignorées.
 
-Le tool orchestre :
-1. Dictionnaire \`setting.state.invoice\` → identification des états à exclure (Payée, Payée groupe, Avoiré, ProForma, Création, Annulée — flag \`isExcludedFromSentState\` + regex).
-2. Recherche paginée \`/invoices\` avec filtres de périmètre + \`states\` (états restants).
-3. Filtre côté serveur : \`expectedPaymentDate < asOfDate\` + bornes \`amountMin/MaxExcludingTax\`.
-4. **Second pass** : la société n'étant pas embarquée directement sur \`/invoices\` (relation \`order\` uniquement), on fetch chaque ordre unique via \`GET /orders/{id}?include=company\` en parallèle (cap 100). Au-delà du cap, l'\`order #<id>\` est affiché à la place du nom pour permettre un drill manuel via \`boond_orders_get\`.
-5. Sortie triée par jours de retard décroissants (ou groupée par société si \`groupByCompany: true\`).
+Pipeline :
+1. Dictionnaire \`setting.state.invoice\` → exclusion (Payée, Payée groupe, Avoiré, ProForma, Création, Annulée).
+2. Recherche \`/invoices\` paginée + filtres périmètre + \`states\` restants.
+3. Filtre serveur : \`expectedPaymentDate < asOfDate\` + bornes montant.
+4. **Résolution société (chaîne invoice → order → project → company)** : la société n'étant ni sur l'invoice ni sur l'order, on fait (a) \`GET /orders/{id}\` pour le projectId, puis (b) \`GET /projects/{id}?include=company\` pour le nom. Dédup à chaque niveau, cap 100 ordres uniques. Au-delà : \`order #<id>\` affiché pour drill manuel.
+5. Sortie triée par jours de retard décroissants (ou groupée par société via \`groupByCompany: true\`).
 
 Paramètres clés :
-- \`asOfDate\` (YYYY-MM-DD, défaut aujourd'hui) — date pivot du retard
-- \`perimeterPoles\`, \`perimeterManagers\`, \`perimeterAgencies\`, \`perimeterBusinessUnits\`, \`perimeterDynamic\` — restreindre le périmètre
-- \`companyId\` — limiter à un client
-- \`amountMinExcludingTax\`, \`amountMaxExcludingTax\` — bornes en € HT
-- \`groupByCompany: true\` — regroupe et affiche le total impayé par client
+- \`asOfDate\` (YYYY-MM-DD, défaut aujourd'hui)
+- \`perimeterPoles\`, \`perimeterManagers\`, \`perimeterAgencies\`, \`perimeterBusinessUnits\`, \`perimeterDynamic\`
+- \`companyId\`, \`amountMin/MaxExcludingTax\`, \`groupByCompany\`
 
-Returns : tableau lisible par le LLM, avec en-tête statistique (nb factures, total HT impayé, période d'analyse).`;
+Returns : tableau enrichi (référence, société, expectedPaymentDate, montant HT/TTC, état) + en-tête statistique.`;
 
 interface InvoiceStateRef {
   id: number;

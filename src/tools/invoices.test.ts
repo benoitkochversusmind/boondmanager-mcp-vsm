@@ -102,10 +102,30 @@ function invoiceWithOrder(
   };
 }
 
-function order(id: string, companyId: string) {
+/**
+ * Order resource — `relationships.project` is the canonical link from order
+ * to client (the live BoondManager API does NOT expose `company` on the order
+ * directly, verified by inspecting order 2325 on 2026-05-21).
+ *
+ * `companyId` (optional second arg) lets a test pin the legacy/defensive
+ * "order has company directly" path — it's not the production shape but the
+ * code accepts it for instances that differ from VSM.
+ */
+function order(id: string, projectId: string, companyId?: string) {
+  const rels: Record<string, unknown> = { project: { data: { id: projectId, type: "project" } } };
+  if (companyId) rels.company = { data: { id: companyId, type: "company" } };
   return {
     id,
     type: "order",
+    attributes: {},
+    relationships: rels,
+  };
+}
+
+function project(id: string, companyId: string) {
+  return {
+    id,
+    type: "project",
     attributes: {},
     relationships: { company: { data: { id: companyId, type: "company" } } },
   };
@@ -256,24 +276,44 @@ describe("fetchOverdueInvoices", () => {
     expect(sent.sort((a, b) => a - b)).toEqual([1, 2, 4, 5, 6, 7]);
   });
 
-  it("resolves company via invoice → order → company chain (the canonical /invoices shape)", async () => {
-    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+  it("resolves company via the full invoice → order → project → company chain (canonical prod shape)", async () => {
+    // This is the actual production payload shape observed on the VSM
+    // instance 2026-05-21: the order has NO `company` relationship — only
+    // `project` — so we must follow the 2-step chain via GET /orders/{id}
+    // then GET /projects/{id}?include=company.
+    const fetched: string[] = [];
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, _m, _b, q) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
-      return {
-        data: [
-          invoiceWithOrder("9478", { expectedPaymentDate: "2026-04-30", turnoverInvoicedExcludingTax: 5000 }, "2325"),
-          invoiceWithOrder("9479", { expectedPaymentDate: "2026-03-15", turnoverInvoicedExcludingTax: 8000 }, "2326"),
-        ],
-        included: [
-          order("2325", "501"),
-          order("2326", "502"),
-          company("501", "ACME Industries"),
-          company("502", "Globex Corp"),
-        ],
-      };
+      if (path === "/invoices") {
+        return {
+          data: [
+            invoiceWithOrder("9478", { expectedPaymentDate: "2026-04-30", turnoverInvoicedExcludingTax: 5000 }, "2325"),
+            invoiceWithOrder("9479", { expectedPaymentDate: "2026-03-15", turnoverInvoicedExcludingTax: 8000 }, "2326"),
+          ],
+        };
+      }
+      if (path === "/orders/2325") {
+        fetched.push(path);
+        return { data: order("2325", "1808") };
+      }
+      if (path === "/orders/2326") {
+        fetched.push(path);
+        return { data: order("2326", "1809") };
+      }
+      if (path === "/projects/1808") {
+        fetched.push(path);
+        expect(q).toEqual({ include: "company" });
+        return { data: project("1808", "501"), included: [company("501", "ACME Industries")] };
+      }
+      if (path === "/projects/1809") {
+        fetched.push(path);
+        return { data: project("1809", "502"), included: [company("502", "Globex Corp")] };
+      }
+      return { data: [] };
     });
 
     const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-21", pageSize: 500, maxPages: 5 });
+    expect(fetched.sort()).toEqual(["/orders/2325", "/orders/2326", "/projects/1808", "/projects/1809"]);
     const byId = new Map(rows.map((r) => [r.invoiceId, r]));
     expect(byId.get("9478")?.companyId).toBe("501");
     expect(byId.get("9478")?.companyName).toBe("ACME Industries");
@@ -293,69 +333,68 @@ describe("fetchOverdueInvoices", () => {
     expect(rows[0].companyName).toBe("Direct Inc");
   });
 
-  it("resolves company via second-pass GET /orders/{id} when /invoices doesn't embed it", async () => {
-    // This is the canonical production scenario: BoondManager doesn't embed
-    // the company in the /invoices response (nested include not honored), so
-    // we must follow up with a per-order GET to resolve the name.
-    const ordersFetched: string[] = [];
-    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, _m, _b, query) => {
+  it("uses the defensive 'order has company directly' short-circuit when available", async () => {
+    // Some BoondManager instances (or tabs) DO expose a company relationship
+    // on the order. The chain code should detect it and skip the project hop.
+    let projectCalled = false;
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       if (path === "/invoices") {
         return {
           data: [
-            // No `included` from /invoices — only the order relationship.
-            invoiceWithOrder("9478", { expectedPaymentDate: "2026-04-30", turnoverInvoicedExcludingTax: 5000 }, "2325"),
-            invoiceWithOrder("9479", { expectedPaymentDate: "2026-03-15", turnoverInvoicedExcludingTax: 8000 }, "2326"),
+            invoiceWithOrder("X", { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 1000 }, "100"),
           ],
         };
       }
-      if (path === "/orders/2325") {
-        ordersFetched.push("2325");
-        expect(query).toEqual({ include: "company" });
-        return { data: order("2325", "501"), included: [company("501", "ACME Industries")] };
+      if (path === "/orders/100") {
+        // Pass companyId → order has both `project` and `company` rels.
+        return { data: order("100", "200", "300") };
       }
-      if (path === "/orders/2326") {
-        ordersFetched.push("2326");
-        return { data: order("2326", "502"), included: [company("502", "Globex Corp")] };
+      if (path.startsWith("/projects/")) {
+        projectCalled = true;
+        return { data: project("200", "irrelevant") };
       }
       return { data: [] };
     });
-
-    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-21", pageSize: 500, maxPages: 5 });
-    expect(ordersFetched.sort()).toEqual(["2325", "2326"]);
-    const byId = new Map(rows.map((r) => [r.invoiceId, r]));
-    expect(byId.get("9478")?.companyId).toBe("501");
-    expect(byId.get("9478")?.companyName).toBe("ACME Industries");
-    expect(byId.get("9479")?.companyId).toBe("502");
-    expect(byId.get("9479")?.companyName).toBe("Globex Corp");
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
+    expect(rows[0].companyId).toBe("300");
+    expect(projectCalled).toBe(false); // short-circuited via direct company on order
   });
 
-  it("dedupes orderIds in the second-pass lookup (one fetch per unique order)", async () => {
+  it("dedupes both orderIds and projectIds in the chain (one fetch per unique resource)", async () => {
+    // Three invoices, two distinct orders, one shared project → expect exactly
+    // 2 GET /orders + 1 GET /projects (not 3 of each).
     const fetched: string[] = [];
     vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       if (path === "/invoices") {
         return {
           data: [
-            // Three invoices, all on the same order — only one /orders/ call expected.
             invoiceWithOrder("A", { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 1 }, "777"),
-            invoiceWithOrder("B", { expectedPaymentDate: "2026-04-02", turnoverInvoicedExcludingTax: 2 }, "777"),
-            invoiceWithOrder("C", { expectedPaymentDate: "2026-04-03", turnoverInvoicedExcludingTax: 3 }, "777"),
+            invoiceWithOrder("B", { expectedPaymentDate: "2026-04-02", turnoverInvoicedExcludingTax: 2 }, "777"), // same order
+            invoiceWithOrder("C", { expectedPaymentDate: "2026-04-03", turnoverInvoicedExcludingTax: 3 }, "778"), // different order, same project
           ],
         };
       }
-      if (path.startsWith("/orders/")) {
+      if (path === "/orders/777") {
         fetched.push(path);
-        return { data: order("777", "888"), included: [company("888", "Shared Co")] };
+        return { data: order("777", "999") };
+      }
+      if (path === "/orders/778") {
+        fetched.push(path);
+        return { data: order("778", "999") }; // same project as 777
+      }
+      if (path === "/projects/999") {
+        fetched.push(path);
+        return { data: project("999", "888"), included: [company("888", "Shared Co")] };
       }
       return { data: [] };
     });
 
     const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
-    expect(fetched).toEqual(["/orders/777"]);
+    expect(fetched.sort()).toEqual(["/orders/777", "/orders/778", "/projects/999"]);
     for (const r of rows) {
       expect(r.companyName).toBe("Shared Co");
-      expect(r.orderId).toBe("777");
     }
   });
 
@@ -377,12 +416,20 @@ describe("fetchOverdueInvoices", () => {
       }
       if (path.startsWith("/orders/")) {
         fetched.push(path);
-        return { data: order(path.replace("/orders/", ""), "irrelevant") };
+        // All orders point to the same project — the chain's project dedup
+        // means we only get one /projects/ call regardless of how many
+        // orders share it. Keeps this test focused on the order-level cap.
+        return { data: order(path.replace("/orders/", ""), "shared-proj") };
+      }
+      if (path.startsWith("/projects/")) {
+        fetched.push(path);
+        return { data: project("shared-proj", "X"), included: [company("X", "Shared")] };
       }
       return { data: [] };
     });
     const result = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 1 });
-    expect(fetched.length).toBe(100); // capped
+    const orderFetches = fetched.filter((p) => p.startsWith("/orders/"));
+    expect(orderFetches.length).toBe(100); // capped at the order level
     expect(result.unresolvedOrdersAfterCap).toBe(50); // 150 - 100
   });
 
@@ -397,7 +444,8 @@ describe("fetchOverdueInvoices", () => {
         };
       }
       if (path === "/orders/404") {
-        // Order exists but has no company relationship and no name attribute.
+        // Order exists but has neither company nor project relationship → the
+        // chain has nowhere to go and the row falls back to `order #404` display.
         return { data: { id: "404", type: "order", attributes: {}, relationships: {} } };
       }
       return { data: [] };

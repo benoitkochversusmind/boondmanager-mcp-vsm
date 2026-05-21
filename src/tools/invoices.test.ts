@@ -171,7 +171,7 @@ describe("registerInvoiceTools", () => {
     const invoicesCall = apiSpy.mock.calls.find((c) => c[0] === "/invoices");
     expect(invoicesCall).toBeDefined();
     const query = invoicesCall![3] as Record<string, unknown>;
-    expect(query["include"]).toBe("order.company,order,company,project");
+    expect(query["include"]).toBe("order,company,project");
   });
 });
 
@@ -248,7 +248,7 @@ describe("fetchOverdueInvoices", () => {
     expect(invoicesCall).toBeDefined();
     const query = invoicesCall![3] as Record<string, unknown>;
     // Nested include: ask BoondManager to embed order + its linked company
-    expect(query["include"]).toBe("order.company,order,company,project");
+    expect(query["include"]).toBe("order,company,project");
     // unpaid state IDs derived from the real dictionary: exclude 0 (Création),
     // 3 (Payée), 8 (Avoiré), 10 (ProForma), 15 (Payée groupe). Everything
     // else is "still owing".
@@ -293,21 +293,119 @@ describe("fetchOverdueInvoices", () => {
     expect(rows[0].companyName).toBe("Direct Inc");
   });
 
-  it("returns companyId without name when order is embedded but its company isn't", async () => {
+  it("resolves company via second-pass GET /orders/{id} when /invoices doesn't embed it", async () => {
+    // This is the canonical production scenario: BoondManager doesn't embed
+    // the company in the /invoices response (nested include not honored), so
+    // we must follow up with a per-order GET to resolve the name.
+    const ordersFetched: string[] = [];
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, _m, _b, query) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      if (path === "/invoices") {
+        return {
+          data: [
+            // No `included` from /invoices — only the order relationship.
+            invoiceWithOrder("9478", { expectedPaymentDate: "2026-04-30", turnoverInvoicedExcludingTax: 5000 }, "2325"),
+            invoiceWithOrder("9479", { expectedPaymentDate: "2026-03-15", turnoverInvoicedExcludingTax: 8000 }, "2326"),
+          ],
+        };
+      }
+      if (path === "/orders/2325") {
+        ordersFetched.push("2325");
+        expect(query).toEqual({ include: "company" });
+        return { data: order("2325", "501"), included: [company("501", "ACME Industries")] };
+      }
+      if (path === "/orders/2326") {
+        ordersFetched.push("2326");
+        return { data: order("2326", "502"), included: [company("502", "Globex Corp")] };
+      }
+      return { data: [] };
+    });
+
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-21", pageSize: 500, maxPages: 5 });
+    expect(ordersFetched.sort()).toEqual(["2325", "2326"]);
+    const byId = new Map(rows.map((r) => [r.invoiceId, r]));
+    expect(byId.get("9478")?.companyId).toBe("501");
+    expect(byId.get("9478")?.companyName).toBe("ACME Industries");
+    expect(byId.get("9479")?.companyId).toBe("502");
+    expect(byId.get("9479")?.companyName).toBe("Globex Corp");
+  });
+
+  it("dedupes orderIds in the second-pass lookup (one fetch per unique order)", async () => {
+    const fetched: string[] = [];
     vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
-      return {
-        data: [
-          invoiceWithOrder("210", { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 1000 }, "999"),
-        ],
-        // Order is embedded but the company resource itself is missing —
-        // we still surface the company ID for display purposes.
-        included: [order("999", "777")],
-      };
+      if (path === "/invoices") {
+        return {
+          data: [
+            // Three invoices, all on the same order — only one /orders/ call expected.
+            invoiceWithOrder("A", { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 1 }, "777"),
+            invoiceWithOrder("B", { expectedPaymentDate: "2026-04-02", turnoverInvoicedExcludingTax: 2 }, "777"),
+            invoiceWithOrder("C", { expectedPaymentDate: "2026-04-03", turnoverInvoicedExcludingTax: 3 }, "777"),
+          ],
+        };
+      }
+      if (path.startsWith("/orders/")) {
+        fetched.push(path);
+        return { data: order("777", "888"), included: [company("888", "Shared Co")] };
+      }
+      return { data: [] };
+    });
+
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
+    expect(fetched).toEqual(["/orders/777"]);
+    for (const r of rows) {
+      expect(r.companyName).toBe("Shared Co");
+      expect(r.orderId).toBe("777");
+    }
+  });
+
+  it("caps the second-pass fetches and reports the overflow count", async () => {
+    const fetched: string[] = [];
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      if (path === "/invoices") {
+        // 150 unique orders, well over the 100 cap.
+        return {
+          data: Array.from({ length: 150 }, (_, i) =>
+            invoiceWithOrder(
+              `inv-${i}`,
+              { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: i + 1 },
+              `order-${i}`
+            )
+          ),
+        };
+      }
+      if (path.startsWith("/orders/")) {
+        fetched.push(path);
+        return { data: order(path.replace("/orders/", ""), "irrelevant") };
+      }
+      return { data: [] };
+    });
+    const result = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 1 });
+    expect(fetched.length).toBe(100); // capped
+    expect(result.unresolvedOrdersAfterCap).toBe(50); // 150 - 100
+  });
+
+  it("falls back to orderId display when even the second pass can't resolve the name", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      if (path === "/invoices") {
+        return {
+          data: [
+            invoiceWithOrder("9999", { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 100 }, "404"),
+          ],
+        };
+      }
+      if (path === "/orders/404") {
+        // Order exists but has no company relationship and no name attribute.
+        return { data: { id: "404", type: "order", attributes: {}, relationships: {} } };
+      }
+      return { data: [] };
     });
     const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
-    expect(rows[0].companyId).toBe("777");
     expect(rows[0].companyName).toBeNull();
+    expect(rows[0].companyId).toBeNull();
+    expect(rows[0].orderId).toBe("404"); // → output displays `order #404 (driller)`
   });
 
   it("resolves amounts from turnoverInvoicedExcludingTax/IncludingTax (canonical /invoices fields)", async () => {
@@ -393,6 +491,9 @@ describe("fetchOverdueInvoices", () => {
     const calls: Array<Record<string, unknown>> = [];
     vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, _method, _body, query) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      // Stub the second-pass GET /orders/{id} so it doesn't pollute the pagination
+      // record (those calls have no `page` param and would show up as `undefined`).
+      if (path.startsWith("/orders/")) return { data: [] };
       calls.push((query ?? {}) as Record<string, unknown>);
       const page = Number((query as Record<string, unknown>)["page"] ?? 1);
       if (page === 1) {

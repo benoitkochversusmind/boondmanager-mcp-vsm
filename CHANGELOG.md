@@ -3,6 +3,33 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.9.4] - 2026-05-21
+
+BoondManager n'honore pas le nested include `order.company` sur `/invoices` (testé en prod sur la révision 0000039) — l'order est bien embarqué dans `included[]`, mais sa propre relation `company` n'est pas suivie. Conséquence : v1.9.3 affichait `société #<id>` ou `société inconnue`. Cette version résout via un second passage explicite.
+
+### Corrigé
+
+- **Bug 2b (v2) — résolution société via `GET /orders/{id}?include=company`** (`src/tools/invoices.ts`). Pipeline complet :
+  1. La query `/invoices` envoie `include=order,company,project` (plus de nested `order.company`).
+  2. Après scan complet, on collecte les `orderId` uniques des lignes dont `companyName` est null.
+  3. Fetch parallèle de chaque ordre via `GET /orders/{id}?include=company` — capé à **100 lookups uniques** pour borner la latence (≈ 10s avec rate limiter à 10 RPS).
+  4. Cache `orderId → {companyId, companyName}` appliqué aux rows. Au-delà du cap, l'output affiche `order #<id> (driller)` à la place du nom + une note suggérant `boond_orders_get` pour drill manuel.
+- **`OverdueRow.orderId`** ajouté pour pouvoir surfacer l'order quand la société reste introuvable.
+- **`resolveCompaniesViaOrders`** exporté (`src/tools/invoices.ts`) — helper réutilisable qui dédup les orderIds, parallélise via `Promise.allSettled` (le rate limiter `src/services/rate-limiter.ts` throttle naturellement) et avale les erreurs unitaires pour qu'une seule mauvaise réponse ne casse pas le batch.
+- **`boond_invoices_search` et `boond_invoices_get`** bénéficient aussi du second pass : la fonction `resolveUnresolvedCompanies` est partagée entre les 3 outils.
+- **Détail de facture** : la sortie inclut désormais `Bon de commande lié : #<orderId>` quand un order est rattaché — utile pour driller.
+
+### Tests
+
+`src/tools/invoices.test.ts` : **+3 tests** (total 24, vs 21 en 1.9.3) :
+- `resolves company via second-pass GET /orders/{id}` — vérifie le pipeline complet avec mocks pour `/orders/{id}` retournant `included: [company]`. Assert sur le `include=company` query param.
+- `dedupes orderIds in the second-pass lookup` — 3 factures sur le même order → 1 seul GET /orders/.
+- `caps the second-pass fetches` — 150 unique orders → exactement 100 fetches + `unresolvedOrdersAfterCap = 50`.
+- `falls back to orderId display when even the second pass can't resolve` — pinne le comportement de drill.
+- Test « returns companyId without name when order is embedded but its company isn't » remplacé par le scénario réel prod (`resolves company via second-pass GET /orders/{id}`).
+- Le test de pagination filtre désormais les calls `/orders/{id}` du second pass pour rester ciblé sur les calls `/invoices`.
+- **483 tests passants** (vs 480 en 1.9.3).
+
 ## [1.9.3] - 2026-05-21
 
 Application des noms de champs exacts identifiés par le bloc de diagnostic ajouté en 1.9.2. Plus de probing « à la louche » sur les montants et de fallback de relation.

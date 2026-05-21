@@ -95,21 +95,29 @@ function readString(attrs: Record<string, unknown>, candidates: ReadonlyArray<st
   return null;
 }
 
+/**
+ * First-pass company resolution from a single JSON:API response.
+ *
+ * BoondManager's `/invoices` doesn't expose a direct `company` relationship —
+ * the canonical link is via `order`. We also probe direct names defensively
+ * for other endpoints (tabs, /invoices/{id}/company in some instances).
+ *
+ * Returns `orderId` whenever the chain goes through an order, so the caller
+ * can run a second pass with `resolveCompaniesViaOrders` to fetch the missing
+ * name via `GET /orders/{id}` when the nested include didn't expand.
+ */
 function resolveCompany(
   resource: JsonApiResource,
   included: IncludedIndex
-): { id: string | null; name: string | null } {
+): { id: string | null; name: string | null; orderId: string | null } {
   const rels = (resource.relationships ?? {}) as Record<string, unknown>;
   for (const name of COMPANY_REL_NAMES) {
     const ref = relRef(rels[name]);
     if (!ref) continue;
     const full = included.get(`${ref.type}:${ref.id}`);
     const companyName = full ? readString((full.attributes ?? {}) as Record<string, unknown>, ["name", "title"]) : null;
-    return { id: ref.id, name: companyName };
+    return { id: ref.id, name: companyName, orderId: null };
   }
-  // Fall back to following the order → company chain when the invoice doesn't
-  // expose the company relationship directly. We only resolve the name if the
-  // order resource is itself in `included`.
   const orderRef = relRef(rels["order"]);
   if (orderRef) {
     const order = included.get(`order:${orderRef.id}`);
@@ -120,11 +128,75 @@ function resolveCompany(
         if (!cref) continue;
         const cfull = included.get(`${cref.type}:${cref.id}`);
         const cname = cfull ? readString((cfull.attributes ?? {}) as Record<string, unknown>, ["name", "title"]) : null;
-        return { id: cref.id, name: cname };
+        return { id: cref.id, name: cname, orderId: orderRef.id };
       }
     }
+    // Order ref present but neither order nor company is in `included[]`.
+    return { id: null, name: null, orderId: orderRef.id };
   }
-  return { id: null, name: null };
+  return { id: null, name: null, orderId: null };
+}
+
+/**
+ * Second-pass company resolution: for each unique orderId, do a follow-up
+ * `GET /orders/{id}?include=company` to retrieve the linked company.
+ *
+ * The nested `?include=order.company` syntax isn't honored by BoondManager
+ * on `/invoices` (observed on the VSM instance 2026-05-21), so this explicit
+ * round-trip is necessary. We cap the number of lookups to avoid runaway
+ * latency on very large batches — beyond `maxLookups` unique orders, callers
+ * should narrow the perimeter instead.
+ *
+ * Parallelism is bounded naturally by the BoondManager rate limiter
+ * (`src/services/rate-limiter.ts`). Individual failures are swallowed so a
+ * single bad order doesn't fail the whole batch.
+ */
+export async function resolveCompaniesViaOrders(
+  orderIds: ReadonlyArray<string>,
+  maxLookups = 100
+): Promise<Map<string, { id: string | null; name: string | null }>> {
+  const cache = new Map<string, { id: string | null; name: string | null }>();
+  const unique = Array.from(new Set(orderIds)).slice(0, maxLookups);
+  const results = await Promise.allSettled(
+    unique.map(async (orderId) => {
+      const resp = await apiRequest(`/orders/${orderId}`, "GET", undefined, { include: "company" });
+      const entity = Array.isArray(resp.data) ? resp.data[0] : resp.data;
+      if (!entity) return [orderId, { id: null, name: null }] as const;
+      const orderRels = (entity.relationships ?? {}) as Record<string, unknown>;
+      // The order's company can appear under any of the defensive names.
+      let companyId: string | null = null;
+      for (const name of COMPANY_REL_NAMES) {
+        const ref = relRef(orderRels[name]);
+        if (ref) {
+          companyId = ref.id;
+          break;
+        }
+      }
+      // If the response embeds a company resource in `included[]`, surface its name.
+      const idx = buildIncludedIndex(resp);
+      let companyName: string | null = null;
+      if (companyId) {
+        const full = idx.get(`company:${companyId}`);
+        if (full) {
+          companyName = readString((full.attributes ?? {}) as Record<string, unknown>, ["name", "title"]);
+        }
+      }
+      // Some BoondManager instances inline the company name on the order
+      // attributes (e.g. `attributes.company` as a string). Try that too.
+      if (!companyName) {
+        const orderAttrs = (entity.attributes ?? {}) as Record<string, unknown>;
+        companyName = readString(orderAttrs, ["companyName", "company"]);
+      }
+      return [orderId, { id: companyId, name: companyName }] as const;
+    })
+  );
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      const [orderId, info] = r.value;
+      cache.set(orderId, info);
+    }
+  }
+  return cache;
 }
 
 // ---- Tool descriptions ----------------------------------------------------
@@ -160,6 +232,7 @@ interface InvoiceView {
   stateLabel: string | null;
   companyId: string | null;
   companyName: string | null;
+  orderId: string | null;
   raw?: JsonApiResource;
 }
 
@@ -185,6 +258,7 @@ function buildInvoiceView(
     stateLabel: stateIdFinal !== null ? (stateLabelById.get(stateIdFinal) ?? null) : null,
     companyId: company.id,
     companyName: company.name,
+    orderId: company.orderId,
     raw: resource,
   };
 }
@@ -194,6 +268,7 @@ function formatInvoiceLine(v: InvoiceView): string {
   if (v.reference) parts.push(v.reference);
   if (v.companyName) parts.push(v.companyName);
   else if (v.companyId) parts.push(`société #${v.companyId}`);
+  else if (v.orderId) parts.push(`order #${v.orderId}`); // drill via boond_orders_get
   if (v.expectedPaymentDate) parts.push(`règlement prévu ${v.expectedPaymentDate}`);
   else if (v.dueDate) parts.push(`échéance ${v.dueDate}`);
   else if (v.date) parts.push(`date ${v.date}`);
@@ -205,6 +280,26 @@ function formatInvoiceLine(v: InvoiceView): string {
   if (v.stateLabel) parts.push(v.stateLabel);
   else if (v.stateId !== null) parts.push(`état #${v.stateId}`);
   return parts.join(" | ");
+}
+
+/**
+ * For every view whose company is unresolved (but whose `orderId` is known),
+ * fetch the order via `GET /orders/{id}` to retrieve the company. Mutates
+ * the views in place. Capped to avoid runaway latency.
+ */
+async function resolveUnresolvedCompanies(views: InvoiceView[], maxLookups = 100): Promise<void> {
+  const unresolvedOrderIds = views
+    .filter((v) => v.companyName === null && v.orderId !== null)
+    .map((v) => v.orderId as string);
+  if (unresolvedOrderIds.length === 0) return;
+  const cache = await resolveCompaniesViaOrders(unresolvedOrderIds, maxLookups);
+  for (const v of views) {
+    if (v.companyName !== null || !v.orderId) continue;
+    const info = cache.get(v.orderId);
+    if (!info) continue;
+    if (info.id && !v.companyId) v.companyId = info.id;
+    if (info.name) v.companyName = info.name;
+  }
 }
 
 async function formatInvoiceList(response: JsonApiResponse): Promise<string> {
@@ -219,7 +314,11 @@ async function formatInvoiceList(response: JsonApiResponse): Promise<string> {
     for (const s of extractInvoiceStates(dict.payload)) stateLabelById.set(s.id, s.value);
   }
 
-  const lines = data.map((r) => formatInvoiceLine(buildInvoiceView(r, included, stateLabelById)));
+  const views = data.map((r) => buildInvoiceView(r, included, stateLabelById));
+  // Second pass: resolve missing companies via GET /orders/{id}.
+  await resolveUnresolvedCompanies(views);
+
+  const lines = views.map(formatInvoiceLine);
   let result = lines.join("\n");
   if (total !== undefined) result = `Total: ${total} facture(s)\n\n${result}`;
   if (result.length > CHARACTER_LIMIT) {
@@ -238,6 +337,8 @@ async function formatInvoiceDetail(response: JsonApiResponse): Promise<string> {
     for (const s of extractInvoiceStates(dict.payload)) stateLabelById.set(s.id, s.value);
   }
   const v = buildInvoiceView(data, included, stateLabelById);
+  // Single-row second pass: cheap and always worth it on a detail view.
+  await resolveUnresolvedCompanies([v]);
   // Enriched human-readable summary + the raw JSON:API payload for completeness.
   const summary = [
     `# Facture #${v.id}`,
@@ -249,6 +350,7 @@ async function formatInvoiceDetail(response: JsonApiResponse): Promise<string> {
     v.dueDate ? `Échéance contractuelle : ${v.dueDate}` : null,
     v.amountExcludingTax !== null ? `Montant HT : ${v.amountExcludingTax.toFixed(2)} €` : null,
     v.amountIncludingTax !== null ? `Montant TTC : ${v.amountIncludingTax.toFixed(2)} €` : null,
+    v.orderId ? `Bon de commande lié : #${v.orderId}` : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -281,7 +383,7 @@ export function registerInvoiceTools(server: McpServer): void {
       // Nested include: ask BoondManager to embed the order *and* its linked
       // company in `included[]`. The invoice itself doesn't expose a direct
       // `company` relationship — the chain is invoice → order → company.
-      query["include"] = "order.company,order,company,project";
+      query["include"] = "order,company,project";
       const response = await apiRequest("/invoices", "GET", undefined, query);
       const text = await formatInvoiceList(response);
       return { content: [{ type: "text" as const, text }] };
@@ -305,7 +407,7 @@ export function registerInvoiceTools(server: McpServer): void {
     },
     async (params) => {
       const response = await apiRequest(`/invoices/${params.id}`, "GET", undefined, {
-        include: "order.company,order,company,project",
+        include: "order,company,project",
       });
       const text = await formatInvoiceDetail(response);
       return { content: [{ type: "text" as const, text }] };
@@ -403,11 +505,11 @@ const OVERDUE_DESCRIPTION = `Liste les factures en retard de paiement (impayées
 
 **Date pivot** : on filtre **uniquement** sur \`expectedPaymentDate\` (date de règlement prévu, saisie comptable). Le champ \`dueDate\` (échéance contractuelle, parfois auto-calculé) n'est pas utilisé — il n'est pas systématiquement rempli dans BoondManager. Les factures sans \`expectedPaymentDate\` sont donc ignorées.
 
-Un seul appel orchestre :
-1. Récupération du dictionnaire \`setting.state.invoice\` pour identifier les états à exclure (Payée, Payée groupe, Avoiré, ProForma, Création, Annulée — détection par flag \`isExcludedFromSentState\` + regex).
-2. Recherche \`/invoices\` avec les filtres de périmètre + \`states\` (états restants) + \`include=company,order,project\` pour résoudre le nom du client en un appel.
-3. Pagination jusqu'à \`maxPages\` (défaut 5 × \`pageSize\` 500 = 2500 factures scannées).
-4. Filtre côté serveur : \`expectedPaymentDate < asOfDate\` + bornes \`amountMin/MaxExcludingTax\`.
+Le tool orchestre :
+1. Dictionnaire \`setting.state.invoice\` → identification des états à exclure (Payée, Payée groupe, Avoiré, ProForma, Création, Annulée — flag \`isExcludedFromSentState\` + regex).
+2. Recherche paginée \`/invoices\` avec filtres de périmètre + \`states\` (états restants).
+3. Filtre côté serveur : \`expectedPaymentDate < asOfDate\` + bornes \`amountMin/MaxExcludingTax\`.
+4. **Second pass** : la société n'étant pas embarquée directement sur \`/invoices\` (relation \`order\` uniquement), on fetch chaque ordre unique via \`GET /orders/{id}?include=company\` en parallèle (cap 100). Au-delà du cap, l'\`order #<id>\` est affiché à la place du nom pour permettre un drill manuel via \`boond_orders_get\`.
 5. Sortie triée par jours de retard décroissants (ou groupée par société si \`groupByCompany: true\`).
 
 Paramètres clés :
@@ -430,6 +532,7 @@ interface OverdueRow {
   reference: string;
   companyId: string | null;
   companyName: string | null;
+  orderId: string | null;
   expectedPaymentDate: string;
   daysOverdue: number;
   amountExcludingTax: number;
@@ -494,6 +597,8 @@ export async function fetchOverdueInvoices(params: InvoiceOverdueInput): Promise
   asOfDate: string;
   /** Diagnostic snapshot of the first invoice's attribute & relationship keys. */
   firstInvoiceKeys: { attributes: string[]; relationships: string[] } | null;
+  /** Number of unique orderIds that needed lookup but were dropped past the cap. */
+  unresolvedOrdersAfterCap: number;
 }> {
   const asOfDate = params.asOfDate ?? new Date().toISOString().slice(0, 10);
   const asOfMs = Date.parse(`${asOfDate}T00:00:00Z`);
@@ -508,9 +613,10 @@ export async function fetchOverdueInvoices(params: InvoiceOverdueInput): Promise
 
   const baseQuery: Record<string, unknown> = {
     maxResults: params.pageSize,
-    // Nested include: BoondManager exposes the company via the order chain
-    // on /invoices, so we ask for both levels to avoid a second round-trip.
-    include: "order.company,order,company,project",
+    // We only ask for `order` (the canonical relationship on /invoices); the
+    // nested `order.company` syntax isn't honored by BoondManager on this
+    // endpoint, so we resolve company in a second pass via GET /orders/{id}.
+    include: "order,company,project",
   };
   if (unpaidStateIds.length) baseQuery["states"] = unpaidStateIds;
   if (params.companyId) baseQuery["companyId"] = params.companyId;
@@ -561,6 +667,7 @@ export async function fetchOverdueInvoices(params: InvoiceOverdueInput): Promise
         reference: readString(a, ["reference"]) ?? "(sans réf)",
         companyId: company.id,
         companyName: company.name,
+        orderId: company.orderId,
         expectedPaymentDate,
         daysOverdue: diffDays(expMs, asOfMs),
         amountExcludingTax: amountHT ?? 0,
@@ -573,8 +680,29 @@ export async function fetchOverdueInvoices(params: InvoiceOverdueInput): Promise
     if (data.length < params.pageSize) break;
   }
 
+  // Second pass — BoondManager's nested `include=order.company` isn't honored
+  // on /invoices, so the company name is missing for rows resolved via the
+  // order chain. Collect unique orderIds for unresolved rows and fetch each
+  // order separately (capped at 100 to bound latency).
+  const unresolvedOrderIds = Array.from(
+    new Set(rows.filter((r) => r.companyName === null && r.orderId !== null).map((r) => r.orderId as string))
+  );
+  let unresolvedOrdersAfterCap = 0;
+  if (unresolvedOrderIds.length > 0) {
+    const cap = 100;
+    unresolvedOrdersAfterCap = Math.max(0, unresolvedOrderIds.length - cap);
+    const cache = await resolveCompaniesViaOrders(unresolvedOrderIds, cap);
+    for (const row of rows) {
+      if (row.companyName !== null || !row.orderId) continue;
+      const info = cache.get(row.orderId);
+      if (!info) continue;
+      if (info.id && !row.companyId) row.companyId = info.id;
+      if (info.name) row.companyName = info.name;
+    }
+  }
+
   rows.sort((a, b) => b.daysOverdue - a.daysOverdue);
-  return { rows, scanned, asOfDate, firstInvoiceKeys };
+  return { rows, scanned, asOfDate, firstInvoiceKeys, unresolvedOrdersAfterCap };
 }
 
 function formatOverdueOutput(
@@ -582,7 +710,8 @@ function formatOverdueOutput(
   scanned: number,
   asOfDate: string,
   groupByCompany: boolean,
-  firstInvoiceKeys: { attributes: string[]; relationships: string[] } | null
+  firstInvoiceKeys: { attributes: string[]; relationships: string[] } | null,
+  unresolvedOrdersAfterCap: number
 ): string {
   if (rows.length === 0) {
     let msg = `Aucune facture en retard au ${asOfDate} (${scanned} factures scannées dans le périmètre).`;
@@ -634,13 +763,20 @@ function formatOverdueOutput(
   }
 
   const lines = rows.map((r) => {
-    const companyDisplay = r.companyName ?? (r.companyId ? `société #${r.companyId}` : "société inconnue");
+    const companyDisplay =
+      r.companyName ??
+      (r.companyId ? `société #${r.companyId}` : r.orderId ? `order #${r.orderId} (driller)` : "société inconnue");
     const stateDisplay = r.stateLabel ?? (r.stateId !== null ? `état #${r.stateId}` : "état ?");
     const ttcSuffix = r.amountIncludingTax !== null ? ` / ${r.amountIncludingTax.toFixed(2)} € TTC` : "";
     return `[invoice #${r.invoiceId}] ${r.reference} | ${companyDisplay} | règlement prévu ${r.expectedPaymentDate} (${r.daysOverdue}j retard) | ${r.amountExcludingTax.toFixed(2)} € HT${ttcSuffix} | ${stateDisplay}`;
   });
 
-  return `${header}\n\n${lines.join("\n")}${diagnostic}`;
+  let capNote = "";
+  if (unresolvedOrdersAfterCap > 0) {
+    capNote = `\n\nℹ️ ${unresolvedOrdersAfterCap} ordre(s) supplémentaire(s) non résolu(s) (cap de 100 lookups atteint). Réduis le périmètre pour résoudre toutes les sociétés, ou drill manuellement via \`boond_orders_get\` sur les \`order #<id>\` affichés.`;
+  }
+
+  return `${header}\n\n${lines.join("\n")}${capNote}${diagnostic}`;
 }
 
 function registerInvoiceOverdueTool(server: McpServer): void {
@@ -658,8 +794,16 @@ function registerInvoiceOverdueTool(server: McpServer): void {
       },
     },
     async (params) => {
-      const { rows, scanned, asOfDate, firstInvoiceKeys } = await fetchOverdueInvoices(params);
-      const text = formatOverdueOutput(rows, scanned, asOfDate, params.groupByCompany ?? false, firstInvoiceKeys);
+      const { rows, scanned, asOfDate, firstInvoiceKeys, unresolvedOrdersAfterCap } =
+        await fetchOverdueInvoices(params);
+      const text = formatOverdueOutput(
+        rows,
+        scanned,
+        asOfDate,
+        params.groupByCompany ?? false,
+        firstInvoiceKeys,
+        unresolvedOrdersAfterCap
+      );
       return { content: [{ type: "text" as const, text }] };
     }
   );

@@ -231,6 +231,89 @@ export const PROMPTS: PromptDefinition[] = [
   },
 
   {
+    name: "factures_en_retard",
+    title: "Factures en retard de paiement avec filtres avancés",
+    description:
+      "Liste les factures en retard de paiement (impayées + échéance dépassée), filtrables par pôle, manager, " +
+      "agence, BU, société et fourchette de montant HT. Utilise le tool composite `boond_invoices_overdue` " +
+      "qui orchestre dictionnaire + recherche + filtre en un seul appel.",
+    argsSchema: {
+      pole_id: z
+        .string()
+        .optional()
+        .describe(
+          "ID de pôle (numérique uniquement, à récupérer via `boond_application_dictionary` setting.pole si besoin). " +
+            "Restreint aux factures dont le responsable appartient à ce pôle."
+        ),
+      manager_id: z
+        .string()
+        .optional()
+        .describe("Manager / responsable des factures. " + ID_OR_NAME_HINT_RESOURCE),
+      society_id: z
+        .string()
+        .optional()
+        .describe("Société cliente à relancer. " + ID_OR_NAME_HINT_SOCIETY),
+      amount_min: z.string().optional().describe("Montant HT minimum en € (chiffre entier). Ex: '5000'."),
+      amount_max: z.string().optional().describe("Montant HT maximum en €."),
+      as_of_date: z.string().optional().describe("Date de référence du retard (YYYY-MM-DD). Défaut: aujourd'hui."),
+      group_by_company: z
+        .string()
+        .optional()
+        .describe("'oui' (défaut) pour regrouper par société, 'non' pour liste plate."),
+    },
+    build: ({ pole_id, manager_id, society_id, amount_min, amount_max, as_of_date, group_by_company }) => {
+      const preambles: string[] = [];
+      const filters: string[] = [];
+
+      if (pole_id) {
+        if (/^\d+$/.test(pole_id.trim())) {
+          filters.push(`\`perimeterPoles: [${pole_id.trim()}]\``);
+        } else {
+          preambles.push(
+            `**Préalable — résolution du pôle :** « ${pole_id} » n'est pas un ID numérique.\n` +
+              '- Appeler `boond_application_dictionary` avec `path: "setting.pole"` et retenir l\'ID du pôle dont le libellé matche.\n' +
+              "- Utiliser cet ID comme `<POLE_ID>` ci-dessous.\n"
+          );
+          filters.push("`perimeterPoles: [<POLE_ID>]`");
+        }
+      }
+
+      if (manager_id) {
+        const r = resolveEntity(manager_id, "resource", "<MANAGER_ID>");
+        if (r.preamble) preambles.push(r.preamble);
+        filters.push(`\`perimeterManagers: [${r.idForFilter}]\``);
+      }
+
+      if (society_id) {
+        const r = resolveEntity(society_id, "society", "<SOCIETE_ID>");
+        if (r.preamble) preambles.push(r.preamble);
+        filters.push(`\`companyId: "${r.idForFilter}"\``);
+      }
+
+      if (amount_min) filters.push(`\`amountMinExcludingTax: ${amount_min}\``);
+      if (amount_max) filters.push(`\`amountMaxExcludingTax: ${amount_max}\``);
+      if (as_of_date) filters.push(`\`asOfDate: "${as_of_date}"\``);
+
+      const groupByCompany = (group_by_company ?? "oui").toLowerCase() !== "non";
+      filters.push(`\`groupByCompany: ${groupByCompany}\``);
+
+      const lines: string[] = ["Identifie les factures en retard de paiement avec les filtres ci-dessous.", ""];
+      if (preambles.length) {
+        lines.push(...preambles);
+      }
+      lines.push(
+        "Étapes :",
+        "1. Appeler `boond_invoices_overdue` avec :",
+        ...filters.map((f) => `   - ${f}`),
+        "2. Si la sortie est groupée par société : restituer telle quelle puis proposer 3 actions de relance (top 3 sociétés par montant impayé).",
+        "3. Si la sortie est en liste plate : restituer le tableau, puis mettre en évidence les 5 factures les plus anciennes (> 60j de retard si présent) et proposer un plan de relance.",
+        "4. Conclure par le total HT impayé et la concentration du risque (% du total porté par le top 3 clients)."
+      );
+      return lines.join("\n");
+    },
+  },
+
+  {
     name: "candidats_pour_opportunite",
     title: "Candidats correspondant à une opportunité",
     description:

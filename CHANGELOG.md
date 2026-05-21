@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.9.0] - 2026-05-21
+
+Nouvel outil composite **`boond_invoices_overdue`** dédié à l'identification des factures en retard de paiement, plus extension de la surface de filtres du search facture (états + périmètre). Cible la demande Versusmind : "lister les factures en retard, filtrables par pôle / manager / client / montant".
+
+### Ajouté
+
+- **Tool `boond_invoices_overdue`** (`src/tools/invoices.ts`) — orchestre en un seul appel : récupération du dictionnaire `setting.state.invoice` → exclusion des états "payée" / "annulée" → recherche `/invoices` avec filtres `states[]` + périmètre + tri `dueDate asc` → filtre serveur sur `dueDate < asOfDate` (défaut aujourd'hui) → bornes `amountMin/MaxExcludingTax`. Sortie soit en liste plate triée par jours de retard décroissants, soit groupée par société (`groupByCompany: true`) avec total HT impayé. Pagination interne jusqu'à `maxPages` (défaut 5 × 500 = 2500 factures scannées). Hydrate les noms de sociétés depuis le `included` JSON:API quand l'API les renvoie.
+- **Schema `InvoiceOverdueSchema`** (`src/schemas/index.ts`) — Zod strict avec `asOfDate`, `companyId`, `perimeterManagers/Type`, `perimeterAgencies`, `perimeterPoles`, `perimeterBusinessUnits`, `perimeterDynamic`, `narrowPerimeter`, `amountMin/MaxExcludingTax`, `groupByCompany`, `pageSize`, `maxPages`.
+- **Prompt `factures_en_retard`** (`src/prompts/index.ts`) — wrapper utilisateur autour de `boond_invoices_overdue`. Args : `pole_id`, `manager_id` (ID ou libellé résolu via `boond_resources_search`), `society_id` (ID ou nom), `amount_min/max`, `as_of_date`, `group_by_company`. Restitue un plan d'action de relance basé sur le top 3 sociétés par montant impayé.
+
+### Étendu
+
+- **`InvoiceSearchSchema`** (`src/schemas/index.ts`) — ajout des filtres alignés sur l'API BoondManager : `states[]` (dictionnaire `setting.state.invoice`), `perimeterManagers`, `perimeterManagersType` (`main`/`hr`), `perimeterAgencies`, `perimeterPoles`, `perimeterBusinessUnits`, `perimeterDynamic`, `narrowPerimeter`, `sort`, `order`. La description du tool documente désormais le périmètre + les états + redirige vers `boond_invoices_overdue` pour le cas "factures en retard". Comportement par défaut ajusté : `period` n'est plus forcé à `"period"` quand non fourni (plus correct, sans casser les usages explicites).
+
+### Tests
+
+- **+7 tests** dans `src/tools/invoices.test.ts` : compte 6 tools (vs 5), hint readOnly sur overdue, et 5 tests sur `fetchOverdueInvoices` (exclusion payée/annulée + tri par retard, filtres montant + périmètre transmis à l'API, pagination jusqu'au remplissage partiel, hydratation des noms de sociétés via `included`, rejet `asOfDate` invalide). **+2 tests** dans `src/prompts/index.test.ts` (forward des filtres `pole_id`/`manager_id`/`amount_min` vers `boond_invoices_overdue`, opt-out de `groupByCompany` via `group_by_company: "non"`). **468 tests passants** (vs 461 en 1.8.2).
+
 ## [1.8.2] - 2026-05-08
 
 Correction d'authentification : le client n'arrivait plus à se connecter à BoondManager via la méthode JWT (auto-construit ou pré-construit). L'API renvoyait `422 - Signature verification failed (parameter: jwt)` à chaque requête. Cause : le JWT était envoyé dans `Authorization: Bearer …`, alors que la spec officielle BoondManager exige le header dédié `X-Jwt-Client-Boondmanager`. Le mode BasicAuth (`BOOND_USER` + `BOOND_PASSWORD`) restait fonctionnel via `Authorization: Basic …`.

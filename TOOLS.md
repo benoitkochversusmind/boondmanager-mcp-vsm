@@ -3,7 +3,7 @@
 > Auto-generated from the server registrations. Do not edit by hand.
 > Regenerate with `npm run docs:tools` (CI fails if this file is stale).
 
-**167 tools** across **37 domains** · **11 prompts** · **21 resources**.
+**169 tools** across **37 domains** · **12 prompts** · **21 resources**.
 
 Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destructiveHint), `idempotent` (idempotentHint), `open-world` (openWorldHint, e.g. paginated keyword search).
 
@@ -151,13 +151,14 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_flags_get` | Détails d'un drapeau/étiquette | read · idempotent |
 | `boond_flags_search` | Rechercher des drapeaux/étiquettes | read · idempotent · open-world |
 
-### invoices (5)
+### invoices (6)
 
 | Tool | Title | Hints |
 |---|---|---|
 | `boond_invoices_create` | Créer une facture | write |
 | `boond_invoices_delete` | Supprimer une facture | delete |
 | `boond_invoices_get` | Détails d'une facture | read · idempotent |
+| `boond_invoices_overdue` | Factures en retard de paiement | read · idempotent · open-world |
 | `boond_invoices_search` | Rechercher des factures | read · idempotent · open-world |
 | `boond_invoices_update` | Modifier une facture | write · idempotent |
 
@@ -345,7 +346,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_webhooks_get` | Détails d'un webhook | read · idempotent |
 | `boond_webhooks_search` | Rechercher des webhooks | read · idempotent · open-world |
 
-### workflow (11)
+### workflow (12)
 
 | Tool | Title | Hints |
 |---|---|---|
@@ -353,6 +354,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_workflow_cartographie_competences` | Cartographie des compétences d'un périmètre | read · idempotent |
 | `boond_workflow_cvs_a_mettre_a_jour` | Audit fraîcheur des CV / dossiers techniques | read · idempotent |
 | `boond_workflow_factures_a_relancer` | Factures impayées à relancer | read · idempotent |
+| `boond_workflow_factures_en_retard` | Factures en retard de paiement avec filtres avancés | read · idempotent |
 | `boond_workflow_fiche_consultant` | Fiche complète d'un collaborateur | read · idempotent |
 | `boond_workflow_fin_de_mission` | Anticipation des fins de mission | read · idempotent |
 | `boond_workflow_pipeline_commercial` | Pipeline commercial sur une période | read · idempotent |
@@ -361,7 +363,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_workflow_staffing_disponible` | Consultants disponibles pour un staffing | read · idempotent |
 | `boond_workflow_synthese_equipe` | Synthèse d'une équipe | read · idempotent |
 
-## Prompts (11)
+## Prompts (12)
 
 Pre-orchestrated workflows surfaced via the MCP prompts API.
 
@@ -371,6 +373,7 @@ Pre-orchestrated workflows surfaced via the MCP prompts API.
 | `cartographie_competences` | Cartographie des compétences d'un périmètre | `manager_id?` `agency_id?` `top_n?` |
 | `cvs_a_mettre_a_jour` | Audit fraîcheur des CV / dossiers techniques | `seuil_mois?` `manager_id?` |
 | `factures_a_relancer` | Factures impayées à relancer | `society_id?` |
+| `factures_en_retard` | Factures en retard de paiement avec filtres avancés | `pole_id?` `manager_id?` `society_id?` `amount_min?` `amount_max?` `as_of_date?` `group_by_company?` |
 | `fiche_consultant` | Fiche complète d'un collaborateur | `resource_id` |
 | `fin_de_mission` | Anticipation des fins de mission | `horizon_jours?` `manager_id?` |
 | `pipeline_commercial` | Pipeline commercial sur une période | `date_debut` `date_fin` `manager_id?` |

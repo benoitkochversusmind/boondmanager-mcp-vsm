@@ -38,8 +38,34 @@ describe("registerAllPrompts", () => {
         "cartographie_competences",
         "cvs_a_mettre_a_jour",
         "recherche_profil_competences",
+        "factures_en_retard",
       ])
     );
+  });
+
+  it("factures_en_retard targets boond_invoices_overdue and forwards filters", async () => {
+    registerAllPrompts(server);
+    const call = vi.mocked(server.registerPrompt).mock.calls.find((c) => c[0] === "factures_en_retard");
+    expect(call).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cb = call![2] as any;
+    const result = await cb({ pole_id: "3", manager_id: "42", amount_min: "10000" });
+    const text = result.messages[0].content.text as string;
+    expect(text).toContain("boond_invoices_overdue");
+    expect(text).toContain("perimeterPoles: [3]");
+    expect(text).toContain("perimeterManagers: [42]");
+    expect(text).toContain("amountMinExcludingTax: 10000");
+  });
+
+  it("factures_en_retard groups by company by default, opt-out via group_by_company='non'", async () => {
+    registerAllPrompts(server);
+    const call = vi.mocked(server.registerPrompt).mock.calls.find((c) => c[0] === "factures_en_retard");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cb = call![2] as any;
+    const defaultGroup = await cb({});
+    expect(defaultGroup.messages[0].content.text as string).toContain("groupByCompany: true");
+    const flat = await cb({ group_by_company: "non" });
+    expect(flat.messages[0].content.text as string).toContain("groupByCompany: false");
   });
 
   it("every registered prompt declares both a title and a description", () => {

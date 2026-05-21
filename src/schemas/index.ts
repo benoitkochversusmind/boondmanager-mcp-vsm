@@ -789,16 +789,86 @@ export const InvoiceSearchSchema = z
     keywords: z.string().optional().describe("Mots-clés de recherche (référence, société...)"),
     companyId: z.string().optional().describe("Filtrer par ID société"),
     projectId: z.string().optional().describe("Filtrer par ID projet"),
+    states: intArray("IDs d'états de facture (dictionnaire setting.state.invoice via boond_application_dictionary)."),
+    perimeterManagers: perimeterManagersField,
+    perimeterManagersType: z
+      .enum(["main", "hr"])
+      .optional()
+      .describe("Type de responsable visé par `perimeterManagers` ('main' = Main Manager, 'hr' = HR Manager)."),
+    perimeterAgencies: perimeterAgenciesField,
+    perimeterPoles: perimeterPolesField,
+    perimeterBusinessUnits: perimeterBusinessUnitsField,
+    perimeterDynamic: perimeterDynamicField,
+    narrowPerimeter: narrowPerimeterField,
     startDate: z.string().optional().describe("Date de début de période (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Date de fin de période (YYYY-MM-DD)"),
     period: z
       .string()
       .optional()
       .describe("Type de période (created, updated, expectedPayment, performedPayment, period)"),
+    sort: sortField,
+    order: orderField,
     page: z.number().int().min(1).max(MAX_SEARCH_PAGE).default(1).describe(`Numéro de page (max: ${MAX_SEARCH_PAGE})`),
     pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).describe("Résultats par page"),
   })
   .strict();
+
+// ---- Invoice overdue (composite tool) ----
+
+export const InvoiceOverdueSchema = z
+  .object({
+    asOfDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe(
+        "Date de référence (YYYY-MM-DD) au-delà de laquelle une `dueDate` est considérée en retard. Défaut: aujourd'hui."
+      ),
+    companyId: z.string().optional().describe("Restreindre à une société particulière (ID)."),
+    perimeterManagers: perimeterManagersField,
+    perimeterManagersType: z
+      .enum(["main", "hr"])
+      .optional()
+      .describe("Type de responsable visé par `perimeterManagers` ('main'/'hr')."),
+    perimeterAgencies: perimeterAgenciesField,
+    perimeterPoles: perimeterPolesField,
+    perimeterBusinessUnits: perimeterBusinessUnitsField,
+    perimeterDynamic: perimeterDynamicField,
+    narrowPerimeter: narrowPerimeterField,
+    amountMinExcludingTax: z
+      .number()
+      .nonnegative()
+      .optional()
+      .describe("Montant HT minimum (€) — exclut les factures dont le HT est strictement inférieur."),
+    amountMaxExcludingTax: z
+      .number()
+      .nonnegative()
+      .optional()
+      .describe("Montant HT maximum (€) — exclut les factures dont le HT est strictement supérieur."),
+    groupByCompany: z
+      .boolean()
+      .optional()
+      .describe(
+        "Si true, regroupe la sortie par société avec total impayé. Défaut: false (liste plate triée par jours de retard décroissants)."
+      ),
+    pageSize: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_PAGE_SIZE)
+      .default(MAX_PAGE_SIZE)
+      .describe(`Taille de page interne pour l'appel /invoices (max: ${MAX_PAGE_SIZE}, défaut: ${MAX_PAGE_SIZE}).`),
+    maxPages: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_SEARCH_PAGE)
+      .default(5)
+      .describe("Nombre maximum de pages à scanner côté API. Défaut: 5 (= 2500 factures avec pageSize=500)."),
+  })
+  .strict();
+
+export type InvoiceOverdueInput = z.infer<typeof InvoiceOverdueSchema>;
 
 // ---- Order schemas (Bons de commande) ----
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerInvoiceTools, fetchOverdueInvoices } from "./invoices.js";
+import { registerInvoiceTools, fetchOverdueInvoices, isExcludedFromOverdue } from "./invoices.js";
 import * as boondClient from "../services/boond-client.js";
 import * as dictionaryService from "../services/dictionary.js";
 import type { JsonApiResponse } from "../types.js";
@@ -11,17 +11,25 @@ function createMockServer() {
   } as unknown as McpServer;
 }
 
+// Mirrors the real production dictionary observed via /application/dictionary
+// (setting.state.invoice) — IDs are NOT arbitrary and must match what the
+// shipped instance uses, otherwise the regression tests become fiction.
 const INVOICE_STATE_DICT = {
   data: {
     setting: {
       state: {
         invoice: [
-          { id: 1, value: "À facturer" },
-          { id: 2, value: "Facturée" },
-          { id: 3, value: "Partiellement payée" },
-          { id: 4, value: "Payée" },
-          { id: 5, value: "Annulée" },
-          { id: 6, value: "Litigieuse" },
+          { id: 0, value: "Création", isExcludedFromSentState: true },
+          { id: 1, value: "Transmis au client", isExcludedFromSentState: false },
+          { id: 2, value: "Impayée", isExcludedFromSentState: false },
+          { id: 3, value: "Payée" },
+          { id: 4, value: "Relance 1", isExcludedFromSentState: false },
+          { id: 5, value: "Relance 2", isExcludedFromSentState: false },
+          { id: 6, value: "Transmis au Groupe", isExcludedFromSentState: false },
+          { id: 7, value: "Payée partiellement", isExcludedFromSentState: false },
+          { id: 8, value: "Avoiré", isExcludedFromSentState: false },
+          { id: 10, value: "ProForma", isExcludedFromSentState: true },
+          { id: 15, value: "Payée groupe", isExcludedFromSentState: false },
         ],
       },
     },
@@ -31,9 +39,10 @@ const INVOICE_STATE_DICT = {
 function invoice(
   id: string,
   attrs: {
-    dueDate?: string;
     expectedPaymentDate?: string;
-    amountExcludingTax?: number;
+    dueDate?: string;
+    turnoverExcludingTax?: number;
+    turnoverIncludingTax?: number;
     state?: number;
     reference?: string;
   },
@@ -44,13 +53,18 @@ function invoice(
     type: "invoice",
     attributes: {
       reference: attrs.reference ?? `INV-${id}`,
-      dueDate: attrs.dueDate,
       expectedPaymentDate: attrs.expectedPaymentDate,
-      amountExcludingTax: attrs.amountExcludingTax ?? 0,
-      state: attrs.state ?? 2,
+      dueDate: attrs.dueDate,
+      turnoverExcludingTax: attrs.turnoverExcludingTax,
+      turnoverIncludingTax: attrs.turnoverIncludingTax,
+      state: attrs.state ?? 5,
     },
     relationships: companyId ? { company: { data: { id: companyId, type: "company" } } } : undefined,
   };
+}
+
+function company(id: string, name: string) {
+  return { id, type: "company", attributes: { name } };
 }
 
 describe("registerInvoiceTools", () => {
@@ -95,6 +109,54 @@ describe("registerInvoiceTools", () => {
     const deleteCall = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_invoices_delete");
     expect(deleteCall?.[1].annotations?.destructiveHint).toBe(true);
   });
+
+  it("boond_invoices_search asks BoondManager to include company/order/project", async () => {
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      return { data: [] };
+    });
+    registerInvoiceTools(server);
+    const searchCall = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_invoices_search");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cb = searchCall![2] as any;
+    await cb({ pageSize: 1, page: 1 });
+    const invoicesCall = apiSpy.mock.calls.find((c) => c[0] === "/invoices");
+    expect(invoicesCall).toBeDefined();
+    const query = invoicesCall![3] as Record<string, unknown>;
+    expect(query["include"]).toBe("company,order,project");
+  });
+});
+
+describe("isExcludedFromOverdue", () => {
+  // Uses the actual production state values to verify Bug 3 stays fixed.
+  it("excludes states flagged isExcludedFromSentState (Création, ProForma)", () => {
+    expect(isExcludedFromOverdue({ id: 0, value: "Création", isExcludedFromSentState: true })).toBe(true);
+    expect(isExcludedFromOverdue({ id: 10, value: "ProForma", isExcludedFromSentState: true })).toBe(true);
+  });
+
+  it("excludes paid states (Payée, Payée groupe) regardless of flag", () => {
+    expect(isExcludedFromOverdue({ id: 3, value: "Payée" })).toBe(true);
+    expect(isExcludedFromOverdue({ id: 15, value: "Payée groupe", isExcludedFromSentState: false })).toBe(true);
+  });
+
+  it("KEEPS Payée partiellement (still has an outstanding balance)", () => {
+    expect(isExcludedFromOverdue({ id: 7, value: "Payée partiellement", isExcludedFromSentState: false })).toBe(false);
+  });
+
+  it("excludes Avoiré (credit notes are not receivables)", () => {
+    expect(isExcludedFromOverdue({ id: 8, value: "Avoiré", isExcludedFromSentState: false })).toBe(true);
+  });
+
+  it("excludes Annulée defensively even when not in the live dictionary", () => {
+    expect(isExcludedFromOverdue({ id: 99, value: "Annulée" })).toBe(true);
+  });
+
+  it("KEEPS active relance / impayée / contentieux states", () => {
+    expect(isExcludedFromOverdue({ id: 2, value: "Impayée", isExcludedFromSentState: false })).toBe(false);
+    expect(isExcludedFromOverdue({ id: 4, value: "Relance 1", isExcludedFromSentState: false })).toBe(false);
+    expect(isExcludedFromOverdue({ id: 5, value: "Relance 2", isExcludedFromSentState: false })).toBe(false);
+    expect(isExcludedFromOverdue({ id: 13, value: "Contentieux", isExcludedFromSentState: false })).toBe(false);
+  });
 });
 
 describe("fetchOverdueInvoices", () => {
@@ -103,170 +165,151 @@ describe("fetchOverdueInvoices", () => {
     dictionaryService.resetDictionaryCacheForTests();
   });
 
-  it("excludes paid/cancelled states and keeps only invoices with dueDate < asOfDate", async () => {
+  it("filters strictly on expectedPaymentDate (no dueDate fallback) and sends correct unpaid state IDs", async () => {
     const apiSpy = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
-      // /invoices
       return {
         data: [
-          invoice("100", { dueDate: "2026-04-01", amountExcludingTax: 5000, state: 2 }, "10"), // overdue
-          invoice("101", { dueDate: "2026-07-01", amountExcludingTax: 8000, state: 2 }, "10"), // future, ignored
-          invoice("102", { dueDate: "2026-03-15", amountExcludingTax: 3000, state: 3 }, "11"), // partially paid, kept
+          // Overdue via expectedPaymentDate — kept
+          invoice("100", { expectedPaymentDate: "2026-04-01", turnoverExcludingTax: 5000, state: 5 }, "10"),
+          // Has dueDate but no expectedPaymentDate — DROPPED (strict mode, no fallback)
+          invoice("101", { dueDate: "2026-03-01", turnoverExcludingTax: 8000, state: 5 }, "11"),
+          // expectedPaymentDate in the future — dropped
+          invoice("102", { expectedPaymentDate: "2026-09-01", turnoverExcludingTax: 3000, state: 5 }, "10"),
         ],
       };
     });
 
-    const { rows, scanned, asOfDate } = await fetchOverdueInvoices({
+    const { rows } = await fetchOverdueInvoices({
       asOfDate: "2026-05-01",
       pageSize: 500,
       maxPages: 5,
     });
 
-    expect(asOfDate).toBe("2026-05-01");
-    expect(scanned).toBe(3);
-    // Sorted by daysOverdue DESC (oldest first)
-    expect(rows.map((r) => r.invoiceId)).toEqual(["102", "100"]);
-    expect(rows[0].daysOverdue).toBe(47); // 2026-05-01 - 2026-03-15
-    expect(rows[1].daysOverdue).toBe(30); // 2026-05-01 - 2026-04-01
+    expect(rows.map((r) => r.invoiceId)).toEqual(["100"]);
 
-    // First call → dictionary, second → /invoices with states=[1,2,3,6] (no 4 paid, no 5 cancelled)
     const invoicesCall = apiSpy.mock.calls.find((c) => c[0] === "/invoices");
     expect(invoicesCall).toBeDefined();
-    const queryParams = invoicesCall![3] as Record<string, unknown>;
-    expect(queryParams["states"]).toEqual([1, 2, 3, 6]);
-    // No explicit sort: we rely on BoondManager's default ordering so invoices using
-    // expectedPaymentDate aren't pushed past the maxPages window.
-    expect(queryParams["sort"]).toBeUndefined();
-    expect(queryParams["order"]).toBeUndefined();
+    const query = invoicesCall![3] as Record<string, unknown>;
+    // include= drives BoondManager to embed the company in `included[]`
+    expect(query["include"]).toBe("company,order,project");
+    // unpaid state IDs derived from the real dictionary: exclude 0 (Création),
+    // 3 (Payée), 8 (Avoiré), 10 (ProForma), 15 (Payée groupe). Everything
+    // else is "still owing".
+    const sent = query["states"] as number[];
+    expect(sent.sort((a, b) => a - b)).toEqual([1, 2, 4, 5, 6, 7]);
   });
 
-  it("uses expectedPaymentDate when populated, falling back to dueDate otherwise", async () => {
+  it("resolves company names via JSON:API included[]", async () => {
     vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       return {
         data: [
-          // Only expectedPaymentDate → must be picked up (regression for v1.9.0 bug)
-          invoice("500", { expectedPaymentDate: "2026-03-10", amountExcludingTax: 1000 }, "50"),
-          // Only dueDate → still works
-          invoice("501", { dueDate: "2026-02-01", amountExcludingTax: 2000 }, "51"),
-          // Both fields set → expectedPaymentDate wins
-          invoice("502", { expectedPaymentDate: "2026-04-01", dueDate: "2026-01-01", amountExcludingTax: 3000 }, "52"),
-          // Neither field → dropped
-          invoice("503", { amountExcludingTax: 4000 }, "53"),
-          // expectedPaymentDate is future → dropped (not overdue)
-          invoice("504", { expectedPaymentDate: "2026-09-01", amountExcludingTax: 5000 }, "54"),
+          invoice("200", { expectedPaymentDate: "2026-04-01", turnoverExcludingTax: 1000 }, "20"),
+          invoice("201", { expectedPaymentDate: "2026-03-01", turnoverExcludingTax: 2000 }, "21"),
         ],
+        included: [company("20", "ACME Industries"), company("21", "Globex Corp")],
       };
     });
 
-    const { rows } = await fetchOverdueInvoices({
-      asOfDate: "2026-05-01",
-      pageSize: 500,
-      maxPages: 5,
-    });
-
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
     const byId = new Map(rows.map((r) => [r.invoiceId, r]));
-    expect([...byId.keys()].sort()).toEqual(["500", "501", "502"]);
-
-    // expectedPaymentDate was used for 500 (only that field) and 502 (both set)
-    expect(byId.get("500")!.dateField).toBe("expectedPaymentDate");
-    expect(byId.get("500")!.effectiveDate).toBe("2026-03-10");
-    expect(byId.get("502")!.dateField).toBe("expectedPaymentDate");
-    expect(byId.get("502")!.effectiveDate).toBe("2026-04-01"); // not 2026-01-01 (dueDate)
-
-    // dueDate is the fallback for 501
-    expect(byId.get("501")!.dateField).toBe("dueDate");
-    expect(byId.get("501")!.effectiveDate).toBe("2026-02-01");
+    expect(byId.get("200")?.companyName).toBe("ACME Industries");
+    expect(byId.get("201")?.companyName).toBe("Globex Corp");
   });
 
-  it("applies amount range filtering and perimeter filters", async () => {
-    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+  it("resolves amounts from turnoverExcludingTax/turnoverIncludingTax fields", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       return {
         data: [
-          invoice("200", { dueDate: "2026-01-01", amountExcludingTax: 500 }, "20"), // too small
-          invoice("201", { dueDate: "2026-01-01", amountExcludingTax: 50000 }, "20"), // too big
-          invoice("202", { dueDate: "2026-01-01", amountExcludingTax: 10000 }, "20"), // kept
+          invoice(
+            "300",
+            {
+              expectedPaymentDate: "2026-04-01",
+              turnoverExcludingTax: 12345.67,
+              turnoverIncludingTax: 14814.8,
+            },
+            "30"
+          ),
         ],
       };
     });
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
+    expect(rows[0].amountExcludingTax).toBeCloseTo(12345.67);
+    expect(rows[0].amountIncludingTax).toBeCloseTo(14814.8);
+  });
 
-    const { rows } = await fetchOverdueInvoices({
+  it("excludes Avoiré (id 8) and ProForma (id 10) from the states query", async () => {
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      return { data: [] };
+    });
+    await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 1 });
+    const query = apiSpy.mock.calls.find((c) => c[0] === "/invoices")![3] as Record<string, unknown>;
+    const sent = query["states"] as number[];
+    expect(sent).not.toContain(8);
+    expect(sent).not.toContain(10);
+    expect(sent).not.toContain(3);
+    expect(sent).not.toContain(15);
+  });
+
+  it("applies amount range filters and reports diagnostic keys when no rows are returned", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      return {
+        data: [
+          // Below the amount floor — dropped
+          invoice("400", { expectedPaymentDate: "2026-04-01", turnoverExcludingTax: 100 }, "40"),
+        ],
+      };
+    });
+    const result = await fetchOverdueInvoices({
       asOfDate: "2026-05-01",
       amountMinExcludingTax: 1000,
-      amountMaxExcludingTax: 20000,
-      perimeterPoles: [3, 7],
-      perimeterManagers: [42],
       pageSize: 500,
       maxPages: 5,
     });
-
-    expect(rows.map((r) => r.invoiceId)).toEqual(["202"]);
-    const queryParams = apiSpy.mock.calls.find((c) => c[0] === "/invoices")![3] as Record<string, unknown>;
-    expect(queryParams["perimeterPoles"]).toEqual([3, 7]);
-    expect(queryParams["perimeterManagers"]).toEqual([42]);
+    expect(result.rows).toHaveLength(0);
+    expect(result.firstInvoiceKeys).toEqual({
+      attributes: [
+        "reference",
+        "expectedPaymentDate",
+        "dueDate",
+        "turnoverExcludingTax",
+        "turnoverIncludingTax",
+        "state",
+      ],
+      relationships: ["company"],
+    });
   });
 
-  it("paginates until fewer than pageSize rows are returned", async () => {
+  it("paginates until a partial page is returned", async () => {
     const calls: Array<Record<string, unknown>> = [];
     vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, _method, _body, query) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       calls.push((query ?? {}) as Record<string, unknown>);
       const page = Number((query as Record<string, unknown>)["page"] ?? 1);
-      // Page 1: 2 rows (= full page), page 2: 1 row (partial → stop after)
       if (page === 1) {
         return {
           data: [
-            invoice("301", { dueDate: "2026-01-01", amountExcludingTax: 100 }, "30"),
-            invoice("302", { dueDate: "2026-01-02", amountExcludingTax: 200 }, "30"),
+            invoice("501", { expectedPaymentDate: "2026-01-01", turnoverExcludingTax: 100 }, "50"),
+            invoice("502", { expectedPaymentDate: "2026-01-02", turnoverExcludingTax: 200 }, "50"),
           ],
         };
       }
-      return { data: [invoice("303", { dueDate: "2026-01-03", amountExcludingTax: 300 }, "30")] };
+      return { data: [invoice("503", { expectedPaymentDate: "2026-01-03", turnoverExcludingTax: 300 }, "50")] };
     });
-
-    const { rows, scanned } = await fetchOverdueInvoices({
-      asOfDate: "2026-05-01",
-      pageSize: 2,
-      maxPages: 5,
-    });
-
+    const { rows, scanned } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 2, maxPages: 5 });
     expect(scanned).toBe(3);
     expect(rows).toHaveLength(3);
     expect(calls.map((c) => c["page"])).toEqual([1, 2]);
   });
 
-  it("hydrates company names from JSON:API `included`", async () => {
-    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
-      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
-      return {
-        data: [invoice("400", { dueDate: "2026-01-01", amountExcludingTax: 1000 }, "40")],
-        included: [
-          {
-            id: "40",
-            type: "company",
-            attributes: { name: "ACME Industries" },
-          },
-        ],
-      };
-    });
-
-    const { rows } = await fetchOverdueInvoices({
-      asOfDate: "2026-05-01",
-      pageSize: 500,
-      maxPages: 5,
-    });
-    expect(rows[0].companyName).toBe("ACME Industries");
-  });
-
   it("rejects an asOfDate that does not parse", async () => {
     vi.spyOn(boondClient, "apiRequest").mockResolvedValue(INVOICE_STATE_DICT);
-    await expect(
-      fetchOverdueInvoices({
-        asOfDate: "not-a-date",
-        pageSize: 500,
-        maxPages: 5,
-      })
-    ).rejects.toThrow(/asOfDate invalide/);
+    await expect(fetchOverdueInvoices({ asOfDate: "not-a-date", pageSize: 500, maxPages: 5 })).rejects.toThrow(
+      /asOfDate invalide/
+    );
   });
 });

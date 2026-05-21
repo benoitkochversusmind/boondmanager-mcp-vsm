@@ -3,6 +3,32 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.9.2] - 2026-05-21
+
+Correction de 4 bugs sur les tools factures, identifiés en prod après inspection du vrai dictionnaire `setting.state.invoice` et des payloads JSON:API renvoyés par BoondManager.
+
+### Corrigé
+
+- **Bug 3 — états « Avoiré », « ProForma », « Payée groupe », « Création » désormais exclus** de `boond_invoices_overdue` (`src/tools/invoices.ts`). La détection combine le flag natif BoondManager `isExcludedFromSentState` (utilisé pour Création + ProForma) et une regex étendue couvrant `^pay[ée]e` (sans `partiel`), `avoir`, `annul`. « Payée partiellement » (id 7) reste correctement incluse — solde encore dû. La fonction d'exclusion `isExcludedFromOverdue` est exportée pour tests unitaires.
+- **Bug 2 — montant HT et nom de société désormais résolus** dans `boond_invoices_overdue`. Trois changements :
+  1. La query envoie `include=company,order,project` pour que BoondManager embarque les ressources liées dans `included[]`.
+  2. La résolution de société utilise le pattern `buildIncludedIndex` + `lookupRelated` (déjà éprouvé dans `actions.ts`), avec fallback `company → mainCompany → invoicedCompany → society`, puis chaîne `order → company` si la relation directe est absente.
+  3. Le montant est lu défensivement parmi `turnoverExcludingTax`, `amountExcludingTax`, `totalExcludingTax`, `turnover`, `amount` (premier non-null gagne). Idem pour TTC : `turnoverIncludingTax`, `amountIncludingTax`, `totalIncludingTax`. La sortie affiche désormais montant HT + TTC quand présent.
+- **Bug 1 — `expectedPaymentDate` est désormais le filtre strict** (plus de fallback `?? dueDate`). Cohérent avec la pratique comptable Versusmind : `expectedPaymentDate` (« Date de règlement prévu », saisie comptable) est le pivot du recouvrement ; `dueDate` (« Échéance ») est calculée et pas toujours fiable. Les factures sans `expectedPaymentDate` sont ignorées. Un commentaire d'en-tête dans `src/tools/invoices.ts` documente la convention.
+- **Bug 4 — `boond_invoices_search` et `boond_invoices_get` enrichis** avec un formateur dédié `formatInvoiceList` / `formatInvoiceDetail`. La sortie inclut désormais : référence, nom société (résolue via `included[]`), `expectedPaymentDate` (ou `dueDate` en fallback display), montant HT + TTC, libellé d'état. Le détail conserve aussi le payload JSON:API brut en dessous pour les usages avancés. Les deux endpoints envoient désormais `include=company,order,project`.
+
+### Garde-fou diagnostic
+
+Si après ces probings le tool overdue retombe quand même sur des montants à zéro ou des sociétés inconnues sur l'intégralité du batch, la sortie ajoute un bloc « ⚠️ Diagnostic » listant les vrais noms `attributes[]` et `relationships[]` vus sur la 1re facture scannée. Permet d'étendre les listes `AMOUNT_*_FIELDS` / `COMPANY_REL_NAMES` sans round-trip de debug.
+
+### Tests
+
+`src/tools/invoices.test.ts` réécrit (**+8 tests**, total 18 dans ce fichier vs 10 en 1.9.1) :
+- Le `INVOICE_STATE_DICT` reflète désormais le vrai dictionnaire prod (16 entrées, IDs 0-15 conformes).
+- Suite dédiée `isExcludedFromOverdue` (6 tests) qui pinne : Création/ProForma via flag, Payée + Payée groupe, Avoiré, Annulée défensive, et le maintien de « Payée partiellement » + Relance 1/2 + Impayée + Contentieux.
+- Tests sur `fetchOverdueInvoices` mis à jour : filtre strict `expectedPaymentDate` sans fallback, résolution société via `included[]`, résolution montant via `turnoverExcludingTax`, vérification que la query envoie `include=company,order,project` ET la bonne liste de states (1, 2, 4, 5, 6, 7).
+- **477 tests passants** (vs 469 en 1.9.1).
+
 ## [1.9.1] - 2026-05-21
 
 Correction de bug sur `boond_invoices_overdue` : le tool filtrait uniquement sur le champ `dueDate` de l'API BoondManager (échéance contractuelle, parfois calculée automatiquement). Mais en pratique, sur les factures Versusmind, c'est `expectedPaymentDate` (date de règlement prévu, saisie comptable) qui est renseigné. Résultat : le tool passait à côté de toutes les factures n'utilisant que `expectedPaymentDate` et renvoyait une liste vide à tort.

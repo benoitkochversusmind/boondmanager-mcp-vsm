@@ -50,7 +50,13 @@ function relRef(rel: unknown): { id: string; type: string } | null {
 // We probe a known set of attribute / relationship names and pick the first
 // hit, so the tool keeps working even if Boond renames a field.
 
+// Confirmed from a live diagnostic on the VSM instance: `/invoices` exposes
+// the amounts as `turnoverInvoicedExcludingTax` / `turnoverInvoicedIncludingTax`
+// (i.e. the "facturé" variant, distinct from the generic `turnover*` used on
+// orders or opportunities). The other names are kept as a defensive fallback
+// for other instances / future API changes.
 const AMOUNT_EXCLUDING_TAX_FIELDS = [
+  "turnoverInvoicedExcludingTax",
   "turnoverExcludingTax",
   "amountExcludingTax",
   "totalExcludingTax",
@@ -58,8 +64,17 @@ const AMOUNT_EXCLUDING_TAX_FIELDS = [
   "amount",
 ] as const;
 
-const AMOUNT_INCLUDING_TAX_FIELDS = ["turnoverIncludingTax", "amountIncludingTax", "totalIncludingTax"] as const;
+const AMOUNT_INCLUDING_TAX_FIELDS = [
+  "turnoverInvoicedIncludingTax",
+  "turnoverIncludingTax",
+  "amountIncludingTax",
+  "totalIncludingTax",
+] as const;
 
+// On /invoices, the company is NOT exposed via a direct relationship on the
+// invoice itself — the canonical chain is invoice.order → order.company.
+// We still probe several names defensively in case BoondManager links the
+// company directly on some endpoints (e.g. tabs).
 const COMPANY_REL_NAMES = ["company", "mainCompany", "invoicedCompany", "society"] as const;
 
 function readNumber(attrs: Record<string, unknown>, candidates: ReadonlyArray<string>): number | null {
@@ -263,7 +278,10 @@ export function registerInvoiceTools(server: McpServer): void {
       if (params.period) query["period"] = params.period;
       // Ask BoondManager to embed the linked company/order/project in `included[]`
       // so we can surface the company name without an extra round-trip.
-      query["include"] = "company,order,project";
+      // Nested include: ask BoondManager to embed the order *and* its linked
+      // company in `included[]`. The invoice itself doesn't expose a direct
+      // `company` relationship — the chain is invoice → order → company.
+      query["include"] = "order.company,order,company,project";
       const response = await apiRequest("/invoices", "GET", undefined, query);
       const text = await formatInvoiceList(response);
       return { content: [{ type: "text" as const, text }] };
@@ -287,7 +305,7 @@ export function registerInvoiceTools(server: McpServer): void {
     },
     async (params) => {
       const response = await apiRequest(`/invoices/${params.id}`, "GET", undefined, {
-        include: "company,order,project",
+        include: "order.company,order,company,project",
       });
       const text = await formatInvoiceDetail(response);
       return { content: [{ type: "text" as const, text }] };
@@ -490,7 +508,9 @@ export async function fetchOverdueInvoices(params: InvoiceOverdueInput): Promise
 
   const baseQuery: Record<string, unknown> = {
     maxResults: params.pageSize,
-    include: "company,order,project",
+    // Nested include: BoondManager exposes the company via the order chain
+    // on /invoices, so we ask for both levels to avoid a second round-trip.
+    include: "order.company,order,company,project",
   };
   if (unpaidStateIds.length) baseQuery["states"] = unpaidStateIds;
   if (params.companyId) baseQuery["companyId"] = params.companyId;

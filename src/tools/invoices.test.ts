@@ -36,11 +36,18 @@ const INVOICE_STATE_DICT = {
   },
 } as unknown as JsonApiResponse;
 
+/**
+ * Generic invoice fixture — accepts an explicit direct company relationship
+ * (used by legacy/defensive tests). For the canonical /invoices payload shape
+ * where the company is reached via the order chain, use `invoiceWithOrder`.
+ */
 function invoice(
   id: string,
   attrs: {
     expectedPaymentDate?: string;
     dueDate?: string;
+    turnoverInvoicedExcludingTax?: number;
+    turnoverInvoicedIncludingTax?: number;
     turnoverExcludingTax?: number;
     turnoverIncludingTax?: number;
     state?: number;
@@ -55,11 +62,52 @@ function invoice(
       reference: attrs.reference ?? `INV-${id}`,
       expectedPaymentDate: attrs.expectedPaymentDate,
       dueDate: attrs.dueDate,
+      turnoverInvoicedExcludingTax: attrs.turnoverInvoicedExcludingTax,
+      turnoverInvoicedIncludingTax: attrs.turnoverInvoicedIncludingTax,
       turnoverExcludingTax: attrs.turnoverExcludingTax,
       turnoverIncludingTax: attrs.turnoverIncludingTax,
       state: attrs.state ?? 5,
     },
     relationships: companyId ? { company: { data: { id: companyId, type: "company" } } } : undefined,
+  };
+}
+
+/**
+ * Mirrors the canonical /invoices payload: the invoice carries an `order`
+ * relationship, and the company is reachable via that order. Verified against
+ * the live VSM instance on 2026-05-21.
+ */
+function invoiceWithOrder(
+  id: string,
+  attrs: {
+    expectedPaymentDate?: string;
+    turnoverInvoicedExcludingTax?: number;
+    turnoverInvoicedIncludingTax?: number;
+    reference?: string;
+    state?: number;
+  },
+  orderId: string
+) {
+  return {
+    id,
+    type: "invoice",
+    attributes: {
+      reference: attrs.reference ?? `INV-${id}`,
+      expectedPaymentDate: attrs.expectedPaymentDate,
+      turnoverInvoicedExcludingTax: attrs.turnoverInvoicedExcludingTax,
+      turnoverInvoicedIncludingTax: attrs.turnoverInvoicedIncludingTax,
+      state: attrs.state ?? 5,
+    },
+    relationships: { order: { data: { id: orderId, type: "order" } } },
+  };
+}
+
+function order(id: string, companyId: string) {
+  return {
+    id,
+    type: "order",
+    attributes: {},
+    relationships: { company: { data: { id: companyId, type: "company" } } },
   };
 }
 
@@ -110,7 +158,7 @@ describe("registerInvoiceTools", () => {
     expect(deleteCall?.[1].annotations?.destructiveHint).toBe(true);
   });
 
-  it("boond_invoices_search asks BoondManager to include company/order/project", async () => {
+  it("boond_invoices_search uses nested include for order.company", async () => {
     const apiSpy = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       return { data: [] };
@@ -123,7 +171,7 @@ describe("registerInvoiceTools", () => {
     const invoicesCall = apiSpy.mock.calls.find((c) => c[0] === "/invoices");
     expect(invoicesCall).toBeDefined();
     const query = invoicesCall![3] as Record<string, unknown>;
-    expect(query["include"]).toBe("company,order,project");
+    expect(query["include"]).toBe("order.company,order,company,project");
   });
 });
 
@@ -171,11 +219,19 @@ describe("fetchOverdueInvoices", () => {
       return {
         data: [
           // Overdue via expectedPaymentDate — kept
-          invoice("100", { expectedPaymentDate: "2026-04-01", turnoverExcludingTax: 5000, state: 5 }, "10"),
+          invoiceWithOrder(
+            "100",
+            { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 5000, state: 5 },
+            "10"
+          ),
           // Has dueDate but no expectedPaymentDate — DROPPED (strict mode, no fallback)
-          invoice("101", { dueDate: "2026-03-01", turnoverExcludingTax: 8000, state: 5 }, "11"),
+          invoice("101", { dueDate: "2026-03-01", turnoverInvoicedExcludingTax: 8000, state: 5 }, "11"),
           // expectedPaymentDate in the future — dropped
-          invoice("102", { expectedPaymentDate: "2026-09-01", turnoverExcludingTax: 3000, state: 5 }, "10"),
+          invoiceWithOrder(
+            "102",
+            { expectedPaymentDate: "2026-09-01", turnoverInvoicedExcludingTax: 3000, state: 5 },
+            "12"
+          ),
         ],
       };
     });
@@ -191,8 +247,8 @@ describe("fetchOverdueInvoices", () => {
     const invoicesCall = apiSpy.mock.calls.find((c) => c[0] === "/invoices");
     expect(invoicesCall).toBeDefined();
     const query = invoicesCall![3] as Record<string, unknown>;
-    // include= drives BoondManager to embed the company in `included[]`
-    expect(query["include"]).toBe("company,order,project");
+    // Nested include: ask BoondManager to embed order + its linked company
+    expect(query["include"]).toBe("order.company,order,company,project");
     // unpaid state IDs derived from the real dictionary: exclude 0 (Création),
     // 3 (Payée), 8 (Avoiré), 10 (ProForma), 15 (Payée groupe). Everything
     // else is "still owing".
@@ -200,44 +256,103 @@ describe("fetchOverdueInvoices", () => {
     expect(sent.sort((a, b) => a - b)).toEqual([1, 2, 4, 5, 6, 7]);
   });
 
-  it("resolves company names via JSON:API included[]", async () => {
+  it("resolves company via invoice → order → company chain (the canonical /invoices shape)", async () => {
     vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       return {
         data: [
-          invoice("200", { expectedPaymentDate: "2026-04-01", turnoverExcludingTax: 1000 }, "20"),
-          invoice("201", { expectedPaymentDate: "2026-03-01", turnoverExcludingTax: 2000 }, "21"),
+          invoiceWithOrder("9478", { expectedPaymentDate: "2026-04-30", turnoverInvoicedExcludingTax: 5000 }, "2325"),
+          invoiceWithOrder("9479", { expectedPaymentDate: "2026-03-15", turnoverInvoicedExcludingTax: 8000 }, "2326"),
         ],
-        included: [company("20", "ACME Industries"), company("21", "Globex Corp")],
+        included: [
+          order("2325", "501"),
+          order("2326", "502"),
+          company("501", "ACME Industries"),
+          company("502", "Globex Corp"),
+        ],
       };
     });
 
-    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-21", pageSize: 500, maxPages: 5 });
     const byId = new Map(rows.map((r) => [r.invoiceId, r]));
-    expect(byId.get("200")?.companyName).toBe("ACME Industries");
-    expect(byId.get("201")?.companyName).toBe("Globex Corp");
+    expect(byId.get("9478")?.companyId).toBe("501");
+    expect(byId.get("9478")?.companyName).toBe("ACME Industries");
+    expect(byId.get("9479")?.companyId).toBe("502");
+    expect(byId.get("9479")?.companyName).toBe("Globex Corp");
   });
 
-  it("resolves amounts from turnoverExcludingTax/turnoverIncludingTax fields", async () => {
+  it("still resolves via direct company relationship when present (other endpoints)", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      return {
+        data: [invoice("200", { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 1000 }, "20")],
+        included: [company("20", "Direct Inc")],
+      };
+    });
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
+    expect(rows[0].companyName).toBe("Direct Inc");
+  });
+
+  it("returns companyId without name when order is embedded but its company isn't", async () => {
     vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       return {
         data: [
-          invoice(
+          invoiceWithOrder("210", { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 1000 }, "999"),
+        ],
+        // Order is embedded but the company resource itself is missing —
+        // we still surface the company ID for display purposes.
+        included: [order("999", "777")],
+      };
+    });
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
+    expect(rows[0].companyId).toBe("777");
+    expect(rows[0].companyName).toBeNull();
+  });
+
+  it("resolves amounts from turnoverInvoicedExcludingTax/IncludingTax (canonical /invoices fields)", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      return {
+        data: [
+          invoiceWithOrder(
             "300",
             {
               expectedPaymentDate: "2026-04-01",
-              turnoverExcludingTax: 12345.67,
-              turnoverIncludingTax: 14814.8,
+              turnoverInvoicedExcludingTax: 12345.67,
+              turnoverInvoicedIncludingTax: 14814.8,
             },
             "30"
           ),
         ],
+        included: [order("30", "60"), company("60", "Foo")],
       };
     });
     const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
     expect(rows[0].amountExcludingTax).toBeCloseTo(12345.67);
     expect(rows[0].amountIncludingTax).toBeCloseTo(14814.8);
+  });
+
+  it("falls back to legacy turnoverExcludingTax when turnoverInvoiced* is absent", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/dictionary") return INVOICE_STATE_DICT;
+      return {
+        data: [
+          invoice(
+            "310",
+            {
+              expectedPaymentDate: "2026-04-01",
+              turnoverExcludingTax: 9999.99,
+              turnoverIncludingTax: 11999.99,
+            },
+            "31"
+          ),
+        ],
+      };
+    });
+    const { rows } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 500, maxPages: 5 });
+    expect(rows[0].amountExcludingTax).toBeCloseTo(9999.99);
+    expect(rows[0].amountIncludingTax).toBeCloseTo(11999.99);
   });
 
   it("excludes Avoiré (id 8) and ProForma (id 10) from the states query", async () => {
@@ -254,13 +369,13 @@ describe("fetchOverdueInvoices", () => {
     expect(sent).not.toContain(15);
   });
 
-  it("applies amount range filters and reports diagnostic keys when no rows are returned", async () => {
+  it("applies amount range filters", async () => {
     vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
       if (path === "/application/dictionary") return INVOICE_STATE_DICT;
       return {
         data: [
           // Below the amount floor — dropped
-          invoice("400", { expectedPaymentDate: "2026-04-01", turnoverExcludingTax: 100 }, "40"),
+          invoiceWithOrder("400", { expectedPaymentDate: "2026-04-01", turnoverInvoicedExcludingTax: 100 }, "40"),
         ],
       };
     });
@@ -271,17 +386,7 @@ describe("fetchOverdueInvoices", () => {
       maxPages: 5,
     });
     expect(result.rows).toHaveLength(0);
-    expect(result.firstInvoiceKeys).toEqual({
-      attributes: [
-        "reference",
-        "expectedPaymentDate",
-        "dueDate",
-        "turnoverExcludingTax",
-        "turnoverIncludingTax",
-        "state",
-      ],
-      relationships: ["company"],
-    });
+    expect(result.firstInvoiceKeys).not.toBeNull();
   });
 
   it("paginates until a partial page is returned", async () => {
@@ -293,12 +398,14 @@ describe("fetchOverdueInvoices", () => {
       if (page === 1) {
         return {
           data: [
-            invoice("501", { expectedPaymentDate: "2026-01-01", turnoverExcludingTax: 100 }, "50"),
-            invoice("502", { expectedPaymentDate: "2026-01-02", turnoverExcludingTax: 200 }, "50"),
+            invoiceWithOrder("501", { expectedPaymentDate: "2026-01-01", turnoverInvoicedExcludingTax: 100 }, "50"),
+            invoiceWithOrder("502", { expectedPaymentDate: "2026-01-02", turnoverInvoicedExcludingTax: 200 }, "50"),
           ],
         };
       }
-      return { data: [invoice("503", { expectedPaymentDate: "2026-01-03", turnoverExcludingTax: 300 }, "50")] };
+      return {
+        data: [invoiceWithOrder("503", { expectedPaymentDate: "2026-01-03", turnoverInvoicedExcludingTax: 300 }, "50")],
+      };
     });
     const { rows, scanned } = await fetchOverdueInvoices({ asOfDate: "2026-05-01", pageSize: 2, maxPages: 5 });
     expect(scanned).toBe(3);

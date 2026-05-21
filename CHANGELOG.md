@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.9.3] - 2026-05-21
+
+Application des noms de champs exacts identifiés par le bloc de diagnostic ajouté en 1.9.2. Plus de probing « à la louche » sur les montants et de fallback de relation.
+
+### Corrigé
+
+- **Bug 2a — montant** : la liste de probing met désormais `turnoverInvoicedExcludingTax` (HT) et `turnoverInvoicedIncludingTax` (TTC) en tête. Ce sont les noms canoniques du payload `/invoices` (variante « facturé », distincte du `turnover*` générique des orders/opportunities). Les anciens noms restent en fallback défensif pour d'autres instances.
+- **Bug 2b — société** : sur `/invoices`, la société n'est pas exposée par une relation directe sur la facture. La chaîne canonique est **`invoice.order → order.company`**. La query envoie maintenant `include=order.company,order,company,project` (nested include JSON:API) pour que BoondManager embarque les deux niveaux dans `included[]`. `resolveCompany` traverse cette chaîne et retourne le `companyId` même quand le nom n'est pas résolu (affichage `société #<id>` en fallback).
+
+### Tests
+
+`src/tools/invoices.test.ts` : +3 tests, total 21 (vs 18 en 1.9.2) :
+- `resolves company via invoice → order → company chain` — pinne le pattern canonique avec ordres et sociétés embarqués dans `included[]`.
+- `returns companyId without name when order is embedded but its company isn't` — couvre le cas où nested include ne marche que partiellement.
+- `falls back to legacy turnoverExcludingTax when turnoverInvoiced* is absent` — vérifie que le fallback défensif fonctionne toujours.
+- Le test global d'unpaid states utilise désormais `invoiceWithOrder` pour matcher la forme réelle de la prod.
+- **480 tests passants** (vs 477 en 1.9.2).
+
 ## [1.9.2] - 2026-05-21
 
 Correction de 4 bugs sur les tools factures, identifiés en prod après inspection du vrai dictionnaire `setting.state.invoice` et des payloads JSON:API renvoyés par BoondManager.

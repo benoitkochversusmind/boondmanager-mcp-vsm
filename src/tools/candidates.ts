@@ -1,15 +1,16 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CandidateCreateSchema, CandidateUpdateSchema, CandidateSearchSchema, IdSchema } from "../schemas/index.js";
-import type { IdInput } from "../schemas/index.js";
+import type { CandidateSearchInput, IdInput } from "../schemas/index.js";
 import {
-  registerSearchTool,
-  registerGetTool,
+  registerGetToolMerged,
   registerCreateTool,
   registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
 } from "./crud-factory.js";
-import { apiRequest, formatDetailResponse } from "../services/boond-client.js";
+import { apiRequest, buildSearchQuery, formatDetailResponse, formatListResponse } from "../services/boond-client.js";
+import { getStateMap } from "../services/dictionary.js";
+import type { JsonApiResource, JsonApiResponse } from "../types.js";
 
 const OPTS = {
   entityName: "candidat",
@@ -104,16 +105,95 @@ Cas d'usage courants :
 • **Recherche par nom** : \`keywords: "Dupont"\` + \`keywordsType: "lastName"\` (ou firstName, fullName avec \`"NOM#PRENOM"\`, emails, phones, title, titleSkills…). Sans \`keywordsType\`, recherche par défaut dans le CV.
 • **Géolocalisation** : \`coordinates: "lat,lon"\` ou \`location\` + \`geoDistance\` (km, 5-200).
 
-Pagination : \`page\`, \`pageSize\` (max 500). Tri : \`sort\` + \`order\`.
+Raccourcis :
+• **\`stateLabel\`** — passer le libellé textuel ('Vivier chaud', 'Embauché'…) plutôt que l'ID. Résolu via le dictionnaire en cache.
+• **\`fetchAll: true\`** — paginate automatiquement jusqu'à \`maxResults\` (défaut 500, max 1000) pour rapatrier l'intégralité d'un vivier filtré.
+
+Pagination manuelle : \`page\`, \`pageSize\` (max 500). Tri : \`sort\` + \`order\`.
 
 Returns : liste paginée des candidats. Utiliser \`boond_candidates_get\` ou les outils d'onglets pour le détail.`;
 
+/** Hard ceiling on rows returned when `fetchAll: true`, matching the schema cap. */
+const CANDIDATE_FETCH_ALL_DEFAULT = 500;
+const CANDIDATE_FETCH_ALL_HARD_CAP = 1000;
+const CANDIDATE_FETCH_ALL_PAGE_SIZE = 500;
+
+/**
+ * Custom search handler: resolves the textual `stateLabel` shortcut to an
+ * integer `candidateStates[]` via the dictionary cache, and optionally
+ * paginates automatically up to `maxResults` when `fetchAll: true`.
+ */
+async function handleCandidateSearch(params: CandidateSearchInput): Promise<{
+  content: { type: "text"; text: string }[];
+}> {
+  const { stateLabel, fetchAll, maxResults, ...rest } = params;
+
+  // 1. Resolve `stateLabel` → `candidateStates: [id]` when no explicit ID was given.
+  //    Explicit IDs win — callers who already pass `candidateStates` aren't second-guessed.
+  if (stateLabel && (!rest.candidateStates || rest.candidateStates.length === 0)) {
+    try {
+      const map = await getStateMap("candidate");
+      const id = map.byLabel.get(stateLabel.toLowerCase().trim());
+      if (id !== undefined) {
+        rest.candidateStates = [id];
+      }
+      // If no match, fall through with no state filter rather than throwing —
+      // the LLM can iterate. We log nothing here to keep stdio transport clean.
+    } catch {
+      // Dictionary unreachable: behave as if stateLabel wasn't passed.
+    }
+  }
+
+  // 2. Single-page path (default, unchanged behavior).
+  if (!fetchAll) {
+    const query = buildSearchQuery(rest);
+    const response = await apiRequest(OPTS.apiPath, "GET", undefined, query);
+    return {
+      content: [{ type: "text" as const, text: formatListResponse(response, OPTS.entityName) }],
+    };
+  }
+
+  // 3. Auto-pagination path. Force a large pageSize and walk until the cap is hit.
+  const cap = Math.min(maxResults ?? CANDIDATE_FETCH_ALL_DEFAULT, CANDIDATE_FETCH_ALL_HARD_CAP);
+  const baseQuery = buildSearchQuery({ ...rest, page: 1, pageSize: CANDIDATE_FETCH_ALL_PAGE_SIZE });
+  const allRows: JsonApiResource[] = [];
+  let firstResponse: JsonApiResponse | null = null;
+  for (let page = 1; allRows.length < cap; page++) {
+    const response = await apiRequest(OPTS.apiPath, "GET", undefined, { ...baseQuery, page });
+    if (firstResponse === null) firstResponse = response;
+    const data = Array.isArray(response.data) ? response.data : response.data ? [response.data] : [];
+    allRows.push(...data);
+    if (data.length < CANDIDATE_FETCH_ALL_PAGE_SIZE) break;
+  }
+  const truncated = allRows.slice(0, cap);
+  // Surface the union as if it were a single response so the existing
+  // formatter renders it identically to the per-page path.
+  const merged: JsonApiResponse = {
+    data: truncated,
+    meta: firstResponse?.meta,
+  };
+  return {
+    content: [{ type: "text" as const, text: formatListResponse(merged, OPTS.entityName) }],
+  };
+}
+
 export function registerCandidateTools(server: McpServer): void {
-  registerSearchTool(server, OPTS, {
-    schema: CandidateSearchSchema,
-    description: CANDIDATE_SEARCH_DESCRIPTION,
-  });
-  registerGetTool(server, OPTS);
+  server.registerTool(
+    `${OPTS.prefix}_search`,
+    {
+      title: "Rechercher des candidats",
+      description: CANDIDATE_SEARCH_DESCRIPTION,
+      inputSchema: CandidateSearchSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params) => handleCandidateSearch(params as CandidateSearchInput)
+  );
+  registerGetToolMerged(server, OPTS);
 
   registerCreateTool(server, OPTS, CandidateCreateSchema, (params) => {
     const { ...attrs } = params;

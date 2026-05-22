@@ -159,6 +159,76 @@ export function resetActionTypeLabelsForTests(): void {
   actionTypeLabelsInFlight = null;
 }
 
+// ---- Static fallback type labels ------------------------------------------
+// Ported from the legacy local MCP server (boond-mcp-server/index.js lines
+// 49-93). These are last-resort labels when the BoondManager dictionary is
+// unreachable (network blip, transient auth failure) OR doesn't expose a
+// type ID we encountered. The two scopes match how BoondManager itself
+// segments the action dictionary (`setting.action.candidate`,
+// `setting.action.contact`) — the same numeric ID can mean different things
+// depending on which entity the action depends on, so we pick the bucket
+// from `dependsOn.type`.
+
+const STATIC_TYPE_LABELS_CANDIDATE: Record<number, string> = {
+  44: "1 - Pré-qualification téléphonique",
+  17: "1 bis - (Re)prise de contact",
+  18: "2 - Relance",
+  19: "3 - Entretien 1 - présentiel",
+  12: "3 - Entretien 1 - visioconférence",
+  22: "4 - Entretien 2 - présentiel avec le futur Manager",
+  23: "5 - Entretien complémentaire",
+  133: "5 bis - Entretien technique",
+  130: "6 - Proposition d'embauche",
+  6: "7 - Préparation de la Réunion de Qualification",
+  0: "7 - Présentation Client - Klif",
+  43: "8 - Signature du contrat de travail",
+  13: "Note",
+  1: "Rappel / To do",
+  41: "Appel",
+  42: "Email",
+  131: "Lien vers dossier de compétences",
+  132: "Résultats tests techniques",
+  134: "Prise de références",
+  14: "Réponse positive candidat",
+  15: "Réponse négative candidat",
+  26: "Infocom",
+};
+
+const STATIC_TYPE_LABELS_CONTACT: Record<number, string> = {
+  61: "1 - Prospection Appel (tentative)",
+  35: "1 bis - Prospection - autre prise de contact",
+  28: "2 - Echange téléphonique (appel abouti)",
+  29: "3 - Rendez-vous client",
+  10: "4 - Réunion de qualification",
+  11: "5 - Suivi de projet",
+  24: "6 - Autre contact (RS, email, ...)",
+  2: "Note",
+  3: "Rappel / To do",
+};
+
+/**
+ * Resolves a numeric action `typeOf` to a human label, picking the right
+ * scope based on the linked entity:
+ *   - "contact" → contact bucket (prospection, RDV client, etc.)
+ *   - anything else → candidate/resource bucket (recrutement)
+ *
+ * Priority order:
+ *   1. Live dictionary cache (most accurate, reflects the org's customizations).
+ *   2. Scoped static fallback (last-known good shape for the VSM instance).
+ *   3. `type#<id>` placeholder so the UI never shows raw numbers.
+ */
+export function resolveActionLabel(
+  typeId: number,
+  dependsOnType: string | undefined,
+  liveLabels: Map<number, string> | undefined
+): string {
+  const live = liveLabels?.get(typeId);
+  if (live) return live;
+  const isContact = dependsOnType === "contact";
+  const fallback = isContact ? STATIC_TYPE_LABELS_CONTACT[typeId] : STATIC_TYPE_LABELS_CANDIDATE[typeId];
+  return fallback ?? `type#${typeId}`;
+}
+
 // ---- JSON:API included resolution -----------------------------------------
 // /actions returns relationships (mainManager, dependsOn, company, ...) whose
 // full attributes are in the top-level `included` array. We index that array
@@ -213,13 +283,18 @@ export function formatActionSummary(entity: unknown, ctx?: ActionFormatContext):
 
   if (attrs.startDate) parts.push(String(attrs.startDate));
 
-  // typeOf — dictionary label when available, fallback to type#N.
+  // dependsOn.type is the dictionary scope: candidate-bucket vs contact-bucket.
+  // We resolve it once and pass it to both the typeOf label resolution AND
+  // the linked-entity rendering below.
+  const dependsOnRef = (rels.dependsOn as { data?: { type?: string } } | undefined)?.data;
+  const dependsOnType = dependsOnRef?.type;
+
+  // typeOf — live dictionary first, then scoped static fallback, then type#N.
   const typeOf = attrs.typeOf;
   if (typeOf !== undefined && typeOf !== null) {
     const numId = typeof typeOf === "number" ? typeOf : Number(typeOf);
     if (Number.isFinite(numId)) {
-      const label = ctx?.typeLabels.get(numId);
-      parts.push(label ?? `type#${numId}`);
+      parts.push(resolveActionLabel(numId, dependsOnType, ctx?.typeLabels));
     } else if (typeof typeOf === "string") {
       parts.push(`type#${typeOf}`);
     }
@@ -255,7 +330,7 @@ export function formatActionSummary(entity: unknown, ctx?: ActionFormatContext):
   return parts.join(" | ");
 }
 
-async function formatActionsList(response: JsonApiResponse): Promise<string> {
+export async function formatActionsList(response: JsonApiResponse): Promise<string> {
   const data = Array.isArray(response.data) ? response.data : [response.data];
   if (data.length === 0 || (data.length === 1 && !data[0])) {
     return "Aucun(e) action trouvé(e).";
@@ -274,6 +349,51 @@ async function formatActionsList(response: JsonApiResponse): Promise<string> {
   }
   return result;
 }
+
+/**
+ * Textual shortcut → BoondManager `actionTypes[]` IDs.
+ *
+ * Ported from the legacy local MCP server (boond-mcp-server/index.js) where it
+ * powered get_actions_log. The IDs are stable across the VSM instance; if a
+ * sibling org has different IDs, callers should fall back to passing `typeOf`
+ * (numeric array) directly — explicit IDs always win over this lookup.
+ *
+ * The mapping is intentionally generous: multiple aliases per intent
+ * (e.g. "rdv" + "rendez-vous", "entretien" matches all variants), and
+ * groups multiple IDs under the same keyword when several action types
+ * share a semantic role (e.g. "entretien" → [19, 12, 22, 23, 133]
+ * covers présentiel + visio + 2nd round + complémentaire + technique).
+ */
+const KEYWORD_TO_TYPES: Record<string, number[]> = {
+  entretien: [19, 12, 22, 23, 133],
+  "entretien 1": [19, 12],
+  "entretien 2": [22],
+  visio: [12],
+  présentiel: [19, 22],
+  technique: [133],
+  qualification: [44],
+  "pré-qualification": [44],
+  relance: [18],
+  reprise: [17],
+  note: [13, 50, 2],
+  rappel: [1, 51, 3],
+  appel: [41, 53],
+  email: [42],
+  proposition: [130],
+  embauche: [130],
+  signature: [43],
+  présentation: [52, 0],
+  test: [132],
+  résultats: [132],
+  référence: [134],
+  infocom: [26],
+  prospection: [61, 35],
+  "rendez-vous": [29, 55],
+  rdv: [29, 55],
+  soutenance: [54],
+  revue: [56],
+  recrutement: [34],
+};
 
 export function registerActionTools(server: McpServer): void {
   // Search actions
@@ -306,20 +426,56 @@ Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type |
     async (params) => {
       // Several schema field names are ergonomic aliases that need translation
       // to the actual BoondManager query parameters before the API call:
-      //   managerId  → perimeterManagers[]   (filter on action creator/responsible)
-      //   dateFrom   → startDate
-      //   dateTo     → endDate
-      //   typeOf     → actionTypes[]
-      // We strip them from `params` and re-inject under the right names so
-      // buildSearchQuery does not forward the wrong key (which the API silently
-      // ignores, leading to baseline-unfiltered results — exactly the bug we
-      // are fixing here).
-      const { managerId, dateFrom, dateTo, typeOf, ...rest } = params;
+      //   managerId   → perimeterManagers[]   (filter on action creator/responsible)
+      //   dateFrom    → startDate
+      //   dateTo      → endDate
+      //   typeOf      → actionTypes[]
+      //   actionType  → typeOf via KEYWORD_TO_TYPES → actionTypes[]
+      //   candidateId → keywords += "CAND<id>" (BoondManager search prefix)
+      //   resourceId  → keywords += "COMP<id>"
+      //   contactId   → keywords += "CCON<id>"
+      //   companyId   → keywords += "CSOC<id>"
+      const {
+        managerId,
+        dateFrom,
+        dateTo,
+        typeOf,
+        actionType,
+        candidateId,
+        resourceId,
+        contactId,
+        companyId,
+        ...rest
+      } = params;
+
+      // Linked-entity filters travel through the `keywords` prefix syntax —
+      // the literal `candidateId=` style is silently ignored by /actions.
+      // We compose a space-separated list so multiple linked filters can be
+      // combined (rare but supported by BoondManager).
+      const linkedPrefixes: string[] = [];
+      if (candidateId) linkedPrefixes.push(`CAND${candidateId}`);
+      if (resourceId) linkedPrefixes.push(`COMP${resourceId}`);
+      if (contactId) linkedPrefixes.push(`CCON${contactId}`);
+      if (companyId) linkedPrefixes.push(`CSOC${companyId}`);
+      if (linkedPrefixes.length > 0) {
+        rest.keywords = rest.keywords ? `${linkedPrefixes.join(" ")} ${rest.keywords}` : linkedPrefixes.join(" ");
+      }
+
       const query = buildSearchQuery(rest);
       if (managerId) query.perimeterManagers = [managerId];
       if (dateFrom) query.startDate = dateFrom;
       if (dateTo) query.endDate = dateTo;
-      if (typeOf && typeOf.length > 0) query.actionTypes = typeOf;
+
+      // Explicit typeOf wins over actionType keyword lookup.
+      let finalTypes = typeOf;
+      if ((!finalTypes || finalTypes.length === 0) && actionType) {
+        const key = actionType.toLowerCase().trim();
+        finalTypes = KEYWORD_TO_TYPES[key];
+        // Allow a stringified numeric ID as a one-shot shortcut.
+        if (!finalTypes && /^\d+$/.test(key)) finalTypes = [Number(key)];
+      }
+      if (finalTypes && finalTypes.length > 0) query.actionTypes = finalTypes;
+
       const response = await apiRequest("/actions", "GET", undefined, query);
       return {
         content: [{ type: "text" as const, text: await formatActionsList(response) }],

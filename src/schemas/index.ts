@@ -217,6 +217,14 @@ export const CandidateSearchSchema = z
     candidateStates: intArray(
       "IDs d'états de candidat (dictionnaire setting.state.candidate via boond_application_dictionary)."
     ),
+    stateLabel: z
+      .string()
+      .optional()
+      .describe(
+        "Libellé d'état candidat (ex: 'Vivier chaud', 'Sourcé', 'Embauché'). " +
+          "Résolu vers son ID via le dictionnaire `setting.state.candidate` mis en cache. " +
+          "Ignoré si `candidateStates` est fourni (priorité à l'ID explicite)."
+      ),
     candidateTypes: intArray("IDs de types de candidat (dictionnaire setting.typeOf.resource)."),
     contractTypes: intArray("IDs de types de contrat recherchés (dictionnaire setting.typeOf.contract)."),
     availabilityTypes: intArray("IDs de types de disponibilité (dictionnaire setting.availability)."),
@@ -251,6 +259,20 @@ export const CandidateSearchSchema = z
     order: orderField,
     page: pageField,
     pageSize: pageSizeField,
+    fetchAll: z
+      .boolean()
+      .optional()
+      .describe(
+        "Si true, paginate automatiquement jusqu'à `maxResults` (cap 1000) au lieu de retourner la page courante. " +
+          "Force `pageSize: 500` et ignore `page`. Pratique pour rapatrier l'intégralité d'un vivier filtré."
+      ),
+    maxResults: z
+      .number()
+      .int()
+      .min(1)
+      .max(1000)
+      .optional()
+      .describe("Plafond strict côté agent quand `fetchAll: true` (défaut: 500, max: 1000)."),
   })
   .strict();
 
@@ -668,6 +690,31 @@ export const ActionSearchSchema = z
         "Filtrer par IDs de types d'action (mappé sur `actionTypes[]` côté API). " +
           "Exemples observés sur cette org : 12=Entretien visio, 19=Entretien présentiel, 13=Note, 41=Appel, 42=Email. " +
           "Pour la liste complète, lire `boond_application_dictionary` avec `dictionaryType = setting.action` (les types sont scopés par entité linkable : contact, candidate, resource, opportunity, project, order, invoice — mais les IDs sont globaux)."
+      ),
+    actionType: z
+      .string()
+      .optional()
+      .describe(
+        "Raccourci textuel — mot-clé résolu vers `typeOf` via un mapping interne. " +
+          "Catégories : note, appel, email, entretien (présentiel + visio + technique), entretien 1/2, visio, présentiel, technique, qualification, pré-qualification, relance, reprise, rappel, proposition, embauche, signature, présentation, test, résultats, référence, infocom, prospection, rendez-vous (alias rdv), soutenance, revue, recrutement. " +
+          "Si `typeOf` est aussi fourni, `typeOf` gagne. Un libellé inconnu est silencieusement ignoré."
+      ),
+    periodDynamic: z
+      .enum([
+        "today",
+        "yesterday",
+        "thisWeek",
+        "lastWeek",
+        "thisMonth",
+        "lastMonth",
+        "thisQuarter",
+        "lastQuarter",
+        "thisYear",
+        "lastYear",
+      ])
+      .optional()
+      .describe(
+        "Période dynamique relative au jour courant. Combinable avec `period` (qui choisit le champ filtré : started / created / updated). Plus pratique que `dateFrom`+`dateTo` pour les requêtes récurrentes."
       ),
     page: z.number().int().min(1).max(MAX_SEARCH_PAGE).default(1).describe(`Numéro de page (max: ${MAX_SEARCH_PAGE})`),
     pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).describe("Résultats par page"),

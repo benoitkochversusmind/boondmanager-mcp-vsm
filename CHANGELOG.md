@@ -3,6 +3,42 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.10.0] - 2026-05-22
+
+Portage des 6 fonctionnalités métier du serveur MCP local Node.js (`boond-mcp-server/index.js`) vers le serveur Azure TypeScript. Toutes les modifications sont additives — pas de breaking change sur les outils existants, tous les nouveaux paramètres sont optionnels et l'authentification OAuth/JWT multi-utilisateurs reste inchangée.
+
+### Ajouté
+
+- **`stateLabel` sur `boond_candidates_search`** (`src/schemas/index.ts`, `src/tools/candidates.ts`) — raccourci textuel (ex: `stateLabel: "Vivier chaud"`) résolu vers `candidateStates: [<id>]` via le dictionnaire `setting.state.candidate` en cache (TTL 1h, partagé avec le reste du serveur). Lookup normalisé case/trim ; libellé inconnu silencieusement ignoré ; `candidateStates` explicite gagne toujours sur `stateLabel`.
+- **`fetchAll: boolean` + `maxResults: number` sur `boond_candidates_search`** — opt-in pour la pagination automatique : force `pageSize: 500`, walks pages jusqu'à `maxResults` (défaut 500, max 1000), agrège les `data[]` en une seule sortie via `formatListResponse`. Garde-fous : break sur page partielle et cap dur côté serveur. La pagination manuelle (`page`, `pageSize`) reste inchangée.
+- **`fetchEntityWithInformation` helper** (`src/services/boond-client.ts`) — fetch parallèle de l'endpoint principal + `/information`, merge des `attributes` (base wins) et union dédupliquée de `included[]` par `${type}:${id}`. Échec de `/information` non-fatal (404, blip réseau → la base remonte intacte).
+- **`registerGetToolMerged` factory** (`src/tools/crud-factory.ts`) — variante de `registerGetTool` qui auto-merge entity + /information quand `tab` n'est pas fourni. Branchée sur **`boond_candidates_get`, `boond_contacts_get`, `boond_opportunities_get`, `boond_companies_get`**. Quand `tab` est explicite (ex: `tab="technical-data"`), le comportement single-tab d'origine est préservé exactement.
+- **`actionType` sémantique sur `boond_actions_search`** (`src/schemas/index.ts`, `src/tools/actions.ts`) — mot-clé textuel (`note`, `appel`, `entretien`, `relance`, `prospection`, `rdv`, …) résolu vers `actionTypes: [<ids>]` via un mapping `KEYWORD_TO_TYPES` (30 catégories portées du serveur local). Accepte aussi un ID stringifié (`actionType: "42"`). `typeOf` explicite gagne ; libellé inconnu silencieusement ignoré.
+- **`periodDynamic` sur `boond_actions_search`** — enum (`today`, `yesterday`, `thisWeek`, `lastWeek`, `thisMonth`, …, `lastYear`) forwardée à l'API tel quel. Combinable avec `period` (qui choisit le champ filtré).
+- **Préfixes `CAND<id>` / `COMP<id>` / `CCON<id>` / `CSOC<id>` sur `boond_actions_search`** — les paramètres `candidateId`, `resourceId`, `contactId`, `companyId` sont désormais injectés dans `keywords` via les préfixes BoondManager (les noms `candidateId=` étaient silencieusement ignorés par l'API `/actions`). Combinable avec un `keywords` utilisateur (préfixes prepended).
+- **Tab `boond_companies_actions` enrichi** (`src/tools/companies.ts`) — utilise désormais `formatActionsList` (HTML strippé, `typeLabel` résolu, nom du `mainManager` extrait des `included[]`, entité liée résolue) au lieu du dump JSON générique. Comportement aligné sur `boond_actions_search`.
+- **`resolveActionLabel(typeId, dependsOnType, liveLabels)` + fallbacks statiques** (`src/tools/actions.ts`) — résolution du label en 3 étages : (1) dictionnaire live (`setting.action.*` en cache), (2) `STATIC_TYPE_LABELS_CONTACT` ou `STATIC_TYPE_LABELS_CANDIDATE` selon `dependsOn.type` (ports lignes 49-93 du fichier local), (3) `type#<id>` en dernier recours. Branché dans `formatActionSummary`.
+- **`getStateMap(entity)` helper** (`src/services/dictionary.ts`) — wrapper typé sur le cache dictionnaire qui retourne `{ byId, byLabel }` pour `setting.state.<entity>` avec normalisation des labels. Exposable pour les 9 entités à états (candidate, resource, contact, company, opportunity, project, invoice, order, positioning).
+
+### Tests
+
+- **+16 tests** dans `src/tools/candidates.test.ts` (stateLabel resolution + normalize + override + fetchAll partial + fetchAll cap), `src/tools/actions.test.ts` (actionType sémantique + alias rdv + ID stringifié + typeOf wins + unknown silent + periodDynamic + 4 préfixes linked + keywords merge + scoped static fallback), `src/services/boond-client.test.ts` (fetchEntityWithInformation : merge base wins, dedup included, /information failure fallback, base failure propagated). **504 tests passants** (vs 484 en 1.9.5).
+
+### Fichiers modifiés (résumé)
+
+| Fichier | Rôle du change |
+|---|---|
+| `src/schemas/index.ts` | `CandidateSearchSchema` (+ stateLabel, fetchAll, maxResults), `ActionSearchSchema` (+ actionType, periodDynamic) |
+| `src/services/dictionary.ts` | Helper `getStateMap()` + interface `StateMap` |
+| `src/services/boond-client.ts` | Helper `fetchEntityWithInformation()` |
+| `src/tools/crud-factory.ts` | Factory `registerGetToolMerged()` qui auto-merge entity + /information |
+| `src/tools/candidates.ts` | Handler custom search (résolution stateLabel + auto-pagination), get merged |
+| `src/tools/contacts.ts` | Get merged |
+| `src/tools/opportunities.ts` | Get merged |
+| `src/tools/companies.ts` | Get merged + tab `actions` utilise `formatActionsList` |
+| `src/tools/actions.ts` | `KEYWORD_TO_TYPES`, `STATIC_TYPE_LABELS_*`, `resolveActionLabel`, handler search étendu (actionType, periodDynamic, préfixes linked), `formatActionsList` exporté |
+| `src/tools/{candidates,actions}.test.ts` et `src/services/boond-client.test.ts` | +16 tests |
+
 ## [1.9.5] - 2026-05-21
 
 Inspection directe de `GET /orders/2325` via le MCP en prod : l'ordre BoondManager **n'a pas de relation `company`** — uniquement `mainManager` (commercial) et `project`. La chaîne réelle est donc à 3 niveaux : invoice → order → project → company. v1.9.4 s'arrêtait à `/orders/{id}` et trouvait null. Cette version étend le second pass.

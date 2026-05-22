@@ -209,9 +209,24 @@ describe("formatActionSummary", () => {
     );
   });
 
-  it("falls back to type#N when the dictionary cache is empty", () => {
+  it("falls back to the static contact-scope label when the dictionary cache is empty", () => {
+    // sampleAction.dependsOn.type = "contact" → ID 35 resolves via the
+    // contact bucket of STATIC_TYPE_LABELS even when the live dictionary
+    // is unavailable. This is the v1.10.0 behavior — the previous
+    // "type#N" fallback was too coarse for the relance / sourcing flows.
     const out = formatActionSummary(sampleAction, makeCtx({ included: [] }));
-    expect(out).toContain("type#35");
+    expect(out).toContain("1 bis - Prospection - autre prise de contact");
+  });
+
+  it("falls back to type#N when neither the dictionary nor the static map covers the ID", () => {
+    const action = {
+      id: "1",
+      type: "action",
+      attributes: { typeOf: 9999 }, // never seen anywhere
+      relationships: { dependsOn: { data: { id: "1", type: "contact" } } },
+    };
+    const out = formatActionSummary(action, makeCtx({ included: [] }));
+    expect(out).toContain("type#9999");
   });
 
   it("resolves a company as linked entity via its `name` attribute", () => {
@@ -281,11 +296,13 @@ describe("formatActionSummary", () => {
     expect(out).toBe("[action #42]");
   });
 
-  it("works without a ctx (degraded mode — only attributes-derived fields)", () => {
+  it("works without a ctx (degraded mode — only attributes-derived fields + static fallback)", () => {
     const out = formatActionSummary(sampleAction);
     expect(out).toContain("[action #216463]");
     expect(out).toContain("2026-05-20T15:40:54+0200");
-    expect(out).toContain("type#35"); // no dictionary → fallback
+    // No ctx → no live dictionary, but the static contact-scope fallback
+    // still resolves ID 35 (sampleAction.dependsOn.type === "contact").
+    expect(out).toContain("1 bis - Prospection - autre prise de contact");
     expect(out).not.toContain("par "); // no included → no manager
     expect(out).not.toContain("→ "); // no included → no linked entity
   });
@@ -301,7 +318,7 @@ describe("boond_actions_search handler — query param mapping", () => {
   function getSearchHandler() {
     registerActionTools(server);
     const call = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_actions_search");
-     
+
     return call![2] as (params: Record<string, unknown>) => Promise<unknown>;
   }
 
@@ -377,6 +394,82 @@ describe("boond_actions_search handler — query param mapping", () => {
       actionTypes: [13],
       period: "created",
     });
+  });
+
+  // ---- v1.10.0 features ported from boond-mcp-server -----------------------
+
+  it("resolves actionType='entretien' to the full entretien bucket [19, 12, 22, 23, 133]", async () => {
+    await getSearchHandler()({ actionType: "entretien", page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.actionTypes).toEqual([19, 12, 22, 23, 133]);
+  });
+
+  it("resolves actionType='rdv' (alias for rendez-vous)", async () => {
+    await getSearchHandler()({ actionType: "rdv", page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.actionTypes).toEqual([29, 55]);
+  });
+
+  it("accepts a stringified numeric actionType as a one-shot ID shortcut", async () => {
+    await getSearchHandler()({ actionType: "42", page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.actionTypes).toEqual([42]);
+  });
+
+  it("explicit typeOf wins over actionType keyword", async () => {
+    await getSearchHandler()({
+      typeOf: [13],
+      actionType: "entretien",
+      page: 1,
+      pageSize: 30,
+      period: "started",
+    });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.actionTypes).toEqual([13]); // explicit wins
+  });
+
+  it("unknown actionType is silently ignored (no actionTypes filter sent)", async () => {
+    await getSearchHandler()({ actionType: "spaghetti", page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query).not.toHaveProperty("actionTypes");
+  });
+
+  it("forwards periodDynamic to the API as-is", async () => {
+    await getSearchHandler()({ periodDynamic: "thisMonth", page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.periodDynamic).toBe("thisMonth");
+  });
+
+  it("injects CAND<id> into keywords when candidateId is set", async () => {
+    await getSearchHandler()({ candidateId: "12345", page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.keywords).toBe("CAND12345");
+    expect(query).not.toHaveProperty("candidateId");
+  });
+
+  it("injects COMP<id> for resourceId, CCON for contactId, CSOC for companyId", async () => {
+    await getSearchHandler()({
+      resourceId: "100",
+      contactId: "200",
+      companyId: "300",
+      page: 1,
+      pageSize: 30,
+      period: "started",
+    });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.keywords).toBe("COMP100 CCON200 CSOC300");
+  });
+
+  it("prepends linked-entity prefixes to user-supplied keywords", async () => {
+    await getSearchHandler()({
+      candidateId: "777",
+      keywords: "follow-up",
+      page: 1,
+      pageSize: 30,
+      period: "started",
+    });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.keywords).toBe("CAND777 follow-up");
   });
 });
 

@@ -108,3 +108,62 @@ export function resetDictionaryCacheForTests(): void {
   cache = null;
   inFlight = null;
 }
+
+/**
+ * Bidirectional label↔id mapping for a `setting.state.*` dictionary node.
+ * `byLabel` keys are normalized (lowercased + trimmed) for forgiving lookup.
+ */
+export interface StateMap {
+  byId: Map<number, string>;
+  byLabel: Map<string, number>;
+}
+
+function parseStateNode(node: unknown): StateMap {
+  const byId = new Map<number, string>();
+  const byLabel = new Map<string, number>();
+  if (!Array.isArray(node)) return { byId, byLabel };
+  for (const entry of node) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (e.isEnabled === false) continue;
+    const id = typeof e.id === "number" ? e.id : Number(e.id);
+    const value = e.value;
+    if (!Number.isFinite(id) || typeof value !== "string") continue;
+    byId.set(id, value);
+    byLabel.set(value.toLowerCase().trim(), id);
+  }
+  return { byId, byLabel };
+}
+
+/**
+ * Returns a `{ byId, byLabel }` map for the state dictionary of a given
+ * BoondManager entity (`setting.state.{candidate|resource|contact|company
+ * |opportunity|project|invoice|order|positioning}`).
+ *
+ * The label lookup is normalized: `getStateMap("candidate").byLabel.get("vivier chaud")`
+ * works regardless of the original casing. Disabled states (`isEnabled: false`)
+ * are skipped — they should not be selectable by callers.
+ *
+ * Backed by the same 1h-TTL dictionary cache as `getDictionary()`, so this
+ * is essentially free after the first call per process.
+ *
+ * Throws if the dictionary fetch itself fails (rare — usually a transient
+ * auth issue). Returns empty maps if the path is missing.
+ */
+export async function getStateMap(
+  entity:
+    | "candidate"
+    | "resource"
+    | "contact"
+    | "company"
+    | "opportunity"
+    | "project"
+    | "invoice"
+    | "order"
+    | "positioning",
+  opts: GetDictionaryOptions = {}
+): Promise<StateMap> {
+  const dict = await getDictionary(opts);
+  const node = resolveDictionaryPath(dict.payload, `setting.state.${entity}`);
+  return parseStateNode(node);
+}

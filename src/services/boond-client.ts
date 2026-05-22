@@ -623,3 +623,73 @@ export function formatDetailResponse(response: JsonApiResponse): string {
 
   return result;
 }
+
+/**
+ * Fetches an entity and its `/information` tab in parallel, then merges the
+ * `data.attributes` and de-duplicated `included[]` arrays into a single
+ * response. Used by `_get` tools for entities that split their data between
+ * the canonical resource and an `information` sub-resource (candidates,
+ * contacts, opportunities, companies).
+ *
+ * - The base entity wins on attribute conflicts when both endpoints expose
+ *   the same key — the `/information` payload generally extends rather than
+ *   contradicts, but we still prefer the canonical resource to avoid stale
+ *   data on rare divergences.
+ * - `included[]` is unioned by `${type}:${id}` so the merged response stays
+ *   valid for downstream JSON:API consumers (e.g. `buildIncludedIndex` in
+ *   tools/actions.ts and tools/invoices.ts).
+ * - Failures on `/information` are non-fatal: if the tab call rejects (404
+ *   on entities without the tab, network blip, etc.), the base response is
+ *   returned unchanged. Callers therefore always get a usable payload.
+ */
+export async function fetchEntityWithInformation(
+  basePath: string,
+  queryParams?: Record<string, QueryValue>
+): Promise<JsonApiResponse> {
+  const [baseResult, infoResult] = await Promise.allSettled([
+    apiRequest(basePath, "GET", undefined, queryParams),
+    apiRequest(`${basePath}/information`, "GET", undefined, queryParams),
+  ]);
+  if (baseResult.status !== "fulfilled") {
+    throw baseResult.reason;
+  }
+  const base = baseResult.value;
+  if (infoResult.status !== "fulfilled") {
+    return base;
+  }
+  const info = infoResult.value;
+
+  // Merge attributes — base entity wins on key conflicts.
+  const baseData = Array.isArray(base.data) ? base.data[0] : base.data;
+  const infoData = Array.isArray(info.data) ? info.data[0] : info.data;
+  if (baseData && infoData) {
+    const infoAttrs = (infoData.attributes ?? {}) as Record<string, unknown>;
+    const baseAttrs = (baseData.attributes ?? {}) as Record<string, unknown>;
+    baseData.attributes = { ...infoAttrs, ...baseAttrs };
+    if (infoData.relationships) {
+      baseData.relationships = { ...(infoData.relationships ?? {}), ...(baseData.relationships ?? {}) };
+    }
+  }
+
+  // Union included[] by `${type}:${id}`.
+  if (info.included && info.included.length > 0) {
+    const seen = new Set<string>();
+    const merged: typeof info.included = [];
+    for (const r of base.included ?? []) {
+      const k = `${r.type}:${r.id}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        merged.push(r);
+      }
+    }
+    for (const r of info.included) {
+      const k = `${r.type}:${r.id}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        merged.push(r);
+      }
+    }
+    base.included = merged;
+  }
+  return base;
+}

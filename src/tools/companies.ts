@@ -3,13 +3,14 @@ import { CompanyCreateSchema, CompanyUpdateSchema, CompanySearchSchema, IdSchema
 import type { IdInput } from "../schemas/index.js";
 import {
   registerSearchTool,
-  registerGetTool,
+  registerGetToolMerged,
   registerCreateTool,
   registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
 } from "./crud-factory.js";
 import { apiRequest, formatDetailResponse } from "../services/boond-client.js";
+import { formatActionsList } from "./actions.js";
 
 const OPTS = {
   entityName: "société",
@@ -157,7 +158,7 @@ export function registerCompanyTools(server: McpServer): void {
     schema: CompanySearchSchema,
     description: COMPANY_SEARCH_DESCRIPTION,
   });
-  registerGetTool(server, OPTS);
+  registerGetToolMerged(server, OPTS);
 
   registerCreateTool(server, OPTS, CompanyCreateSchema, (params) => {
     const { ...attrs } = params;
@@ -183,7 +184,11 @@ export function registerCompanyTools(server: McpServer): void {
       },
       async (params: IdInput) => {
         const response = await apiRequest(`/companies/${params.id}/${tab.tab}`);
-        const text = formatDetailResponse(response);
+        // The /companies/{id}/actions tab benefits from the enriched action
+        // formatter (HTML strip, typeLabel via dictionary, mainManager name,
+        // dependsOn entity resolution) — same shape returned by
+        // boond_actions_search.
+        const text = tab.name === "actions" ? await formatActionsList(response) : formatDetailResponse(response);
         return {
           content: [{ type: "text" as const, text }],
         };

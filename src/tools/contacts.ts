@@ -3,7 +3,7 @@ import { ContactCreateSchema, ContactUpdateSchema, ContactSearchSchema, IdSchema
 import type { IdInput } from "../schemas/index.js";
 import {
   registerSearchTool,
-  registerGetTool,
+  registerGetToolMerged,
   registerCreateTool,
   registerUpdateTool,
   registerDeleteTool,
@@ -124,7 +124,7 @@ export function registerContactTools(server: McpServer): void {
     schema: ContactSearchSchema,
     description: CONTACT_SEARCH_DESCRIPTION,
   });
-  registerGetTool(server, OPTS);
+  registerGetToolMerged(server, OPTS);
 
   registerCreateTool(server, OPTS, ContactCreateSchema, (params) => {
     const { companyId, ...attrs } = params;

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildSearchQuery,
+  fetchEntityWithInformation,
   formatEntitySummary,
   formatListResponse,
   formatDetailResponse,
@@ -1073,5 +1074,104 @@ describe("apiRequest rate limiting", () => {
     const after = vi.mocked(fetchMock).mock.calls.length;
 
     expect(after - before).toBe(5);
+  });
+});
+
+describe("fetchEntityWithInformation (v1.10.0)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    process.env["BOOND_API_TOKEN"] = "test-token";
+    resetRateLimiterForTests();
+    initClient();
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    delete process.env["BOOND_API_TOKEN"];
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    resetRateLimiterForTests();
+  });
+
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("merges attributes from base + /information; base attributes win on conflicts", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith("/candidates/123")) {
+        return Promise.resolve(
+          jsonResponse({
+            data: { id: "123", type: "candidate", attributes: { firstName: "Alice", state: 2 } },
+          })
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          data: {
+            id: "123",
+            type: "candidate",
+            attributes: { availability: "2026-06-01", state: 99 }, // state conflict — base wins
+          },
+        })
+      );
+    });
+
+    const merged = await fetchEntityWithInformation("/candidates/123");
+    const data = Array.isArray(merged.data) ? merged.data[0] : merged.data;
+    expect(data?.attributes).toEqual({
+      firstName: "Alice",
+      availability: "2026-06-01",
+      state: 2, // base wins
+    });
+  });
+
+  it("unions the included[] arrays by `${type}:${id}` (de-duplicated)", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      const isBase = url.endsWith("/contacts/9");
+      return Promise.resolve(
+        jsonResponse({
+          data: { id: "9", type: "contact", attributes: {} },
+          included: isBase
+            ? [{ id: "1", type: "company", attributes: { name: "ACME" } }]
+            : [
+                { id: "1", type: "company", attributes: { name: "ACME" } }, // dup
+                { id: "2", type: "address", attributes: { city: "Paris" } },
+              ],
+        })
+      );
+    });
+
+    const merged = await fetchEntityWithInformation("/contacts/9");
+    expect(merged.included).toHaveLength(2);
+    const ids = (merged.included ?? []).map((r) => `${r.type}:${r.id}`).sort();
+    expect(ids).toEqual(["address:2", "company:1"]);
+  });
+
+  it("returns the base entity unchanged when /information fails (404, network, etc.)", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith("/companies/5")) {
+        return Promise.resolve(
+          jsonResponse({
+            data: { id: "5", type: "company", attributes: { name: "Acme" } },
+          })
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+
+    const merged = await fetchEntityWithInformation("/companies/5");
+    const data = Array.isArray(merged.data) ? merged.data[0] : merged.data;
+    expect(data?.attributes).toEqual({ name: "Acme" });
+  });
+
+  it("propagates the failure when the base entity itself errors out", async () => {
+    fetchMock.mockResolvedValue(new Response("oops", { status: 500 }));
+    await expect(fetchEntityWithInformation("/candidates/404")).rejects.toThrow();
   });
 });

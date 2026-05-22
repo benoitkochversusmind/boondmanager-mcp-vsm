@@ -1,9 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { OpportunityCreateSchema, OpportunityUpdateSchema, OpportunitySearchSchema, IdSchema } from "../schemas/index.js";
+import {
+  OpportunityCreateSchema,
+  OpportunityUpdateSchema,
+  OpportunitySearchSchema,
+  IdSchema,
+} from "../schemas/index.js";
 import type { IdInput } from "../schemas/index.js";
 import {
   registerSearchTool,
-  registerGetTool,
+  registerGetToolMerged,
   registerCreateTool,
   registerUpdateTool,
   registerDeleteTool,
@@ -112,7 +117,7 @@ export function registerOpportunityTools(server: McpServer): void {
     schema: OpportunitySearchSchema,
     description: OPPORTUNITY_SEARCH_DESCRIPTION,
   });
-  registerGetTool(server, OPTS);
+  registerGetToolMerged(server, OPTS);
 
   registerCreateTool(server, OPTS, OpportunityCreateSchema, (params) => {
     const { companyId, contactId, ...attrs } = params;

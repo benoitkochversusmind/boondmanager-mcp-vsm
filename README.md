@@ -11,7 +11,7 @@
 
 Serveur MCP (Model Context Protocol) pour l'API BoondManager, permettant a Claude (Desktop, Cowork, Code) de rechercher, consulter, creer et modifier des enregistrements dans votre instance BoondManager.
 
-**158 outils** couvrant **36 domaines** de l'API BoondManager. Voir [TOOLS.md](./TOOLS.md) pour le catalogue auto-généré (outils + prompts + ressources).
+**169 outils**, **12 prompts** et **21 ressources** couvrant **37 domaines** de l'API BoondManager. Voir [TOOLS.md](./TOOLS.md) pour le catalogue auto-généré.
 
 ## Domaines couverts
 
@@ -38,7 +38,7 @@ Serveur MCP (Model Context Protocol) pour l'API BoondManager, permettant a Claud
 
 | Domaine | Outils | Operations |
 |---------|--------|------------|
-| **Factures client** | 5 | CRUD complet |
+| **Factures client** | 6 | CRUD complet + outil composite `boond_invoices_overdue` (factures en retard de paiement, filtrables par pôle / manager / société / montant, résolution société via chaîne invoice → order → project → company) |
 | **Factures fournisseur** | 2 | search, get |
 | **Bons de commande** | 5 | CRUD complet |
 | **Paiements** | 2 | search, get |
@@ -129,6 +129,7 @@ En plus des outils, le serveur expose des **prompts MCP** (templates pre-cables)
 | `synthese_equipe` | Etat d'une equipe : qui fait quoi, qui est absent, qui est dispo (par defaut : mon equipe). |
 | `pipeline_commercial` | Opportunites avec closing dans une periode : repartition par etat, CA pondere, top 10. |
 | `factures_a_relancer` | Factures impayees dont l'echeance est depassee, regroupees par societe. |
+| `factures_en_retard` | Factures en retard de paiement avec filtres avances : pole, manager, societe, fourchette de montant HT. Utilise `boond_invoices_overdue` (chaine invoice → order → project → company pour resoudre le client). |
 | `candidats_pour_opportunite` | A partir d'une opportunite, propose les candidats actifs qui matchent (outils, expertise, mobilite, dispo). |
 | `fiche_consultant` | Vue 360 d'une ressource : info + technique + positionnements + absences + CRA recents. |
 | `recap_hebdo` | Recap hebdomadaire : pipeline qui a bouge, equipe absente, projets actifs, actions a mener. |
@@ -188,6 +189,19 @@ Exemples d'invocation des prompts ressources / competences / CV :
 ```
 
 > Apres modification de la config Claude (`claude_desktop_config.json` etc.), **redemarrer le client** : la liste des prompts MCP n'est pas hot-reloadee.
+
+## Raccourcis ergonomiques (parametres opt-in)
+
+Plusieurs outils search/get acceptent des **raccourcis textuels ou comportementaux** que le serveur traduit en parametres API canoniques avant l'appel. Tous sont opt-in : passer le parametre sous-jacent (IDs numeriques, pagination manuelle, tab explicite) garde le comportement legacy.
+
+| Outil | Raccourci | Effet |
+|-------|-----------|-------|
+| `boond_candidates_search` | `stateLabel: "Vivier chaud"` | Resolu en `candidateStates: [<id>]` via le dictionnaire `setting.state.candidate` (cache TTL 1h). Lookup insensible a la casse/espaces. Inconnu = ignore silencieusement. |
+| `boond_candidates_search` | `fetchAll: true` (+ `maxResults`) | Auto-pagination : force `pageSize: 500`, walks pages jusqu'a `maxResults` (defaut 500, max 1000) ou jusqu'a une page partielle. Pratique pour rapatrier un vivier filtre entier. |
+| `boond_actions_search` | `actionType: "entretien"` | Resolu en `actionTypes[]` via un mapping de 30 categories (`note`, `appel`, `email`, `entretien`, `relance`, `prospection`, `rdv`, `signature`...). Accepte aussi un ID numerique stringifie. |
+| `boond_actions_search` | `periodDynamic: "thisMonth"` | Periode dynamique (`today`/`yesterday`/`thisWeek`/`lastWeek`/`thisMonth`/`lastMonth`/`thisQuarter`/`lastQuarter`/`thisYear`/`lastYear`). Combinable avec `period` (qui choisit le champ filtre). |
+| `boond_actions_search` | `candidateId`, `resourceId`, `contactId`, `companyId` | Injectes dans `keywords` comme prefixes BoondManager `CAND<id>` / `COMP<id>` / `CCON<id>` / `CSOC<id>` (les noms litteraux sont ignores par l'API `/actions`). |
+| `boond_candidates_get`, `boond_contacts_get`, `boond_opportunities_get`, `boond_companies_get` | (par defaut) | Sans `tab`, la sortie merge l'endpoint principal + l'onglet `/information` en parallele : attributs fusionnes (base wins), `included[]` dedoublonne. Passer `tab="information"` ou un autre tab garde le comportement single-tab. |
 
 ## Prerequis
 

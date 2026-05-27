@@ -370,6 +370,46 @@ describe("boond_actions_search handler — query param mapping", () => {
     expect(query).not.toHaveProperty("typeOf");
   });
 
+  // ---- Bug 2 regression : period must NOT be sent without a date window ----
+
+  it("does NOT send period when neither dates nor periodDynamic are provided", async () => {
+    await getSearchHandler()({ candidateId: "42893", page: 1, pageSize: 30, period: "started" });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    // The whole bug : period=started with no window returned 0 results.
+    expect(query).not.toHaveProperty("period");
+    // candidateId still routed through the CAND keyword prefix.
+    expect(query.keywords).toBe("CAND42893");
+  });
+
+  it("sends period when a date window IS provided", async () => {
+    await getSearchHandler()({
+      candidateId: "42893",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+      period: "started",
+      page: 1,
+      pageSize: 30,
+    });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.period).toBe("started");
+    expect(query.startDate).toBe("2026-05-01");
+    expect(query.endDate).toBe("2026-05-31");
+  });
+
+  it("sends period when only dateFrom is provided (single open bound)", async () => {
+    await getSearchHandler()({ dateFrom: "2026-05-01", period: "created", page: 1, pageSize: 30 });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.period).toBe("created");
+    expect(query.startDate).toBe("2026-05-01");
+  });
+
+  it("sends period AND periodDynamic when only periodDynamic is provided", async () => {
+    await getSearchHandler()({ periodDynamic: "thisMonth", period: "started", page: 1, pageSize: 30 });
+    const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(query.periodDynamic).toBe("thisMonth");
+    expect(query.period).toBe("started"); // legitimate : dynamic window needs the field
+  });
+
   it("omits typeOf when the array is empty", async () => {
     await getSearchHandler()({ typeOf: [], page: 1, pageSize: 30, period: "started" });
     const query = apiSpy.mock.calls[0]?.[3] as Record<string, unknown>;

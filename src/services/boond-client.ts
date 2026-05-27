@@ -693,3 +693,50 @@ export async function fetchEntityWithInformation(
   }
   return base;
 }
+
+/**
+ * Fetches a tab/sub-resource endpoint (e.g. `/candidates/{id}/actions`) with
+ * pagination. BoondManager applies a very low default page size on these
+ * collection tabs, so without an explicit `maxResults` only the first row (or
+ * two) comes back. We request the max page size and walk subsequent pages
+ * until `meta.totals.rows` is covered (capped by `maxPages`).
+ *
+ * For single-entity tabs (e.g. `/information`) the response has no
+ * `meta.totals.rows` and `data` is an object — we detect that and return the
+ * first response untouched (no wasteful extra page fetch).
+ *
+ * The consolidated response keeps the first page's `meta` (so the total stays
+ * visible) and replaces `data` with the concatenation of every page.
+ */
+export async function fetchTabResponse(path: string, maxPages = 10, pageSize = 500): Promise<JsonApiResponse> {
+  const first = await apiRequest(path, "GET", undefined, { maxResults: pageSize, page: 1 });
+  const firstData = Array.isArray(first.data) ? first.data : first.data ? [first.data] : [];
+  const total = first.meta?.totals?.rows;
+
+  // Single entity, unknown total, or everything already fits → no extra calls.
+  if (total === undefined || firstData.length >= total || firstData.length < pageSize) {
+    return first;
+  }
+
+  const allData = [...firstData];
+  for (let page = 2; page <= maxPages && allData.length < total; page++) {
+    const resp = await apiRequest(path, "GET", undefined, { maxResults: pageSize, page });
+    const data = Array.isArray(resp.data) ? resp.data : resp.data ? [resp.data] : [];
+    if (data.length === 0) break;
+    allData.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return { ...first, data: allData };
+}
+
+/**
+ * Auto-selects the right renderer for a tab response:
+ * - collection tabs (array data and/or a `meta.totals.rows`) → list view
+ *   (shows EVERY row, not just `data[0]`)
+ * - single-entity tabs → detail view (full JSON of the one resource)
+ */
+export function formatTabAuto(response: JsonApiResponse, entityLabel: string): string {
+  const data = Array.isArray(response.data) ? response.data : response.data ? [response.data] : [];
+  const isList = response.meta?.totals?.rows !== undefined || data.length > 1;
+  return isList ? formatListResponse(response, entityLabel) : formatDetailResponse(response);
+}

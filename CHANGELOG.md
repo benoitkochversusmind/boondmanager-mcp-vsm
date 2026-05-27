@@ -3,6 +3,23 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.10.1] - 2026-05-27
+
+Deux corrections de bugs remontés en production sur les actions liées aux candidats.
+
+### Corrigé
+
+- **Bug 1 — onglets de collection tronqués à 1 résultat** (`src/services/boond-client.ts`, `src/tools/candidates.ts`, `src/tools/crud-factory.ts`). `boond_candidates_actions` et `boond_candidates_get(tab="actions")` ne renvoyaient qu'une seule action sur 6. Double cause : (a) l'endpoint tab `/candidates/{id}/actions` était appelé sans `maxResults`, donc la page size par défaut très basse de l'API ne ramenait qu'une ou deux lignes ; (b) le rendu passait par `formatDetailResponse` qui ne sérialise que `data[0]`, masquant les lignes restantes même quand l'API en renvoyait plusieurs. Solution :
+  - Nouveau helper `fetchTabResponse(path, maxPages, pageSize)` qui demande `maxResults=500` et pagine jusqu'à couvrir `meta.totals.rows` (cap `maxPages`), sans appel superflu pour les onglets mono-entité (information, technical-data).
+  - Nouveau helper `formatTabAuto(response, label)` qui détecte liste vs entité unique (`meta.totals.rows` présent ou `data.length > 1`) et route vers `formatListResponse` (toutes les lignes) ou `formatDetailResponse`.
+  - `boond_candidates_actions` utilise `fetchTabResponse` + le formateur enrichi `formatActionsList` (HTML strippé, typeLabel, manager, entité liée). Les autres onglets-collection passent par `formatTabAuto`.
+  - `registerGetToolMerged` (utilisé par candidates/contacts/opportunities/companies `_get`) applique le même pattern quand un `tab` est fourni — fix transverse à toutes les entités à onglets.
+- **Bug 2 — `boond_actions_search` sans dates renvoyait 0 résultat** (`src/tools/actions.ts`). Le paramètre `period` (défaut Zod `"started"`) était systématiquement transmis à l'API, même sans `dateFrom`/`dateTo`. BoondManager interprète `period=started` sans fenêtre de dates comme une plage vide et renvoie 0 ligne — ce qui avalait silencieusement toutes les actions d'une recherche `candidateId`-only. Désormais `period` n'est envoyé que si au moins une borne (`dateFrom`/`dateTo`) OU un `periodDynamic` est fourni. `periodDynamic` reste transmis quand présent (seul cas légitime de `period` sans dates explicites).
+
+### Tests
+
+- **+11 tests** : `src/services/boond-client.test.ts` (fetchTabResponse : maxResults=500, single-page, multi-page walk, single-entity no-extra-call ; formatTabAuto : list vs detail), `src/tools/actions.test.ts` (period absent sans fenêtre, présent avec dateFrom/dateTo, présent avec dateFrom seul, présent avec periodDynamic), `src/tools/candidates.test.ts` (onglet actions routé via fetchTabResponse + rendu des 6 actions). **515 tests passants** (vs 504 en 1.10.0).
+
 ## [1.10.0] - 2026-05-22
 
 Portage des 6 fonctionnalités métier du serveur MCP local Node.js (`boond-mcp-server/index.js`) vers le serveur Azure TypeScript. Toutes les modifications sont additives — pas de breaking change sur les outils existants, tous les nouveaux paramètres sont optionnels et l'authentification OAuth/JWT multi-utilisateurs reste inchangée.

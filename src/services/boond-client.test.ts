@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildSearchQuery,
   fetchEntityWithInformation,
+  fetchTabResponse,
   formatEntitySummary,
   formatListResponse,
   formatDetailResponse,
+  formatTabAuto,
   initClient,
   buildJwt,
   apiRequest,
@@ -1173,5 +1175,96 @@ describe("fetchEntityWithInformation (v1.10.0)", () => {
   it("propagates the failure when the base entity itself errors out", async () => {
     fetchMock.mockResolvedValue(new Response("oops", { status: 500 }));
     await expect(fetchEntityWithInformation("/candidates/404")).rejects.toThrow();
+  });
+});
+
+describe("fetchTabResponse + formatTabAuto (Bug 1 — tab pagination)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    process.env["BOOND_API_TOKEN"] = "test-token";
+    resetRateLimiterForTests();
+    initClient();
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    delete process.env["BOOND_API_TOKEN"];
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    resetRateLimiterForTests();
+  });
+
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  function actionsPage(ids: number[], total: number): unknown {
+    return {
+      data: ids.map((i) => ({ id: String(i), type: "action", attributes: { typeOf: 13 } })),
+      meta: { totals: { rows: total } },
+    };
+  }
+
+  it("requests maxResults=500 on the first call (fixes the default-page-size bug)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(actionsPage([1, 2, 3, 4, 5, 6], 6)));
+    await fetchTabResponse("/candidates/42893/actions");
+    const url = new URL(fetchMock.mock.calls[0][0]);
+    expect(url.searchParams.get("maxResults")).toBe("500");
+    expect(url.searchParams.get("page")).toBe("1");
+  });
+
+  it("returns all rows in a single page when total fits", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(actionsPage([1, 2, 3, 4, 5, 6], 6)));
+    const resp = await fetchTabResponse("/candidates/42893/actions");
+    expect(Array.isArray(resp.data)).toBe(true);
+    expect((resp.data as unknown[]).length).toBe(6);
+    // Single API call (everything fit in page 1).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("walks subsequent pages when total exceeds the page size", async () => {
+    // Force a small page by faking total > returned, using pageSize=2.
+    fetchMock.mockImplementation((url: string) => {
+      const page = Number(new URL(url).searchParams.get("page"));
+      if (page === 1) return Promise.resolve(jsonResponse(actionsPage([1, 2], 5)));
+      if (page === 2) return Promise.resolve(jsonResponse(actionsPage([3, 4], 5)));
+      return Promise.resolve(jsonResponse(actionsPage([5], 5)));
+    });
+    const resp = await fetchTabResponse("/candidates/42893/actions", 10, 2);
+    expect((resp.data as unknown[]).map((d: { id: string }) => d.id)).toEqual(["1", "2", "3", "4", "5"]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not make extra calls for a single-entity tab (no meta.totals)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ data: { id: "1", type: "candidate", attributes: { firstName: "Alice" } } })
+    );
+    await fetchTabResponse("/candidates/1/information");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("formatTabAuto renders a LIST (all rows) when meta.totals is present", () => {
+    const resp = {
+      data: [
+        { id: "1", type: "action", attributes: { state: 2 } },
+        { id: "2", type: "action", attributes: { state: 3 } },
+      ],
+      meta: { totals: { rows: 2 } },
+    };
+    const out = formatTabAuto(resp as never, "action");
+    expect(out).toContain("Total: 2 action(s)");
+    expect(out).toContain("#1");
+    expect(out).toContain("#2"); // the bug : data[0]-only would have dropped this
+  });
+
+  it("formatTabAuto renders DETAIL for a single-entity tab", () => {
+    const resp = { data: { id: "1", type: "candidate", attributes: { firstName: "Alice" } } };
+    const out = formatTabAuto(resp as never, "candidat");
+    expect(out).toContain('"firstName": "Alice"');
   });
 });

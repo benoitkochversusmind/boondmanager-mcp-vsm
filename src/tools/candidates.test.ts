@@ -98,6 +98,50 @@ function getSearchHandler() {
   return call![2] as any;
 }
 
+function getTabHandler(toolName: string) {
+  const server = createServer();
+  registerCandidateTools(server);
+  const call = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === toolName);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return call![2] as any;
+}
+
+describe("boond_candidates_actions — tab pagination (Bug 1)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    dictionaryService.resetDictionaryCacheForTests();
+  });
+
+  it("routes the actions tab through fetchTabResponse + enriched formatter and returns ALL actions", async () => {
+    // fetchTabResponse owns the maxResults pagination (covered in
+    // boond-client.test.ts). Here we mock it to focus on the candidates
+    // handler routing : it must use fetchTabResponse (not bare apiRequest)
+    // and render every action via the enriched formatter (not data[0] only).
+    const tabSpy = vi.spyOn(boondClient, "fetchTabResponse").mockResolvedValue({
+      data: Array.from({ length: 6 }, (_, i) => ({
+        id: String(100 + i),
+        type: "action",
+        attributes: { typeOf: 13, startDate: "2026-05-0" + (i + 1) },
+      })),
+      meta: { totals: { rows: 6 } },
+    } as never);
+    // formatActionsList loads the action-type dictionary internally.
+    vi.spyOn(dictionaryService, "getDictionary").mockResolvedValue({
+      payload: { data: { setting: { action: {} } } },
+      fetchedAt: Date.now(),
+      language: "fr",
+    } as never);
+
+    const result = await getTabHandler("boond_candidates_actions")({ id: "42893" });
+
+    expect(tabSpy).toHaveBeenCalledWith("/candidates/42893/actions");
+    const text = result.content[0].text as string;
+    expect(text).toContain("Total: 6 action(s)");
+    expect(text).toContain("#100");
+    expect(text).toContain("#105");
+  });
+});
+
 describe("boond_candidates_search — stateLabel + fetchAll (v1.10.0)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

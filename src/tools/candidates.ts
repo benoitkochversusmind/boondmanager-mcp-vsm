@@ -8,8 +8,15 @@ import {
   registerDeleteTool,
   buildJsonApiBody,
 } from "./crud-factory.js";
-import { apiRequest, buildSearchQuery, formatDetailResponse, formatListResponse } from "../services/boond-client.js";
+import {
+  apiRequest,
+  buildSearchQuery,
+  fetchTabResponse,
+  formatListResponse,
+  formatTabAuto,
+} from "../services/boond-client.js";
 import { getStateMap } from "../services/dictionary.js";
+import { formatActionsList } from "./actions.js";
 import type { JsonApiResource, JsonApiResponse } from "../types.js";
 
 const OPTS = {
@@ -218,8 +225,14 @@ export function registerCandidateTools(server: McpServer): void {
         annotations: TAB_TOOL_ANNOTATIONS,
       },
       async (params: IdInput) => {
-        const response = await apiRequest(`/candidates/${params.id}/${tab.tab}`);
-        const text = formatDetailResponse(response);
+        // Tab collections (actions, positionings) are paginated server-side
+        // with a very low default page size — fetchTabResponse walks all pages.
+        const response = await fetchTabResponse(`/candidates/${params.id}/${tab.tab}`);
+        // The actions tab gets the enriched formatter (HTML strip, typeLabel,
+        // manager + linked entity resolution) ; other collection tabs use the
+        // generic list/detail auto-formatter.
+        const text =
+          tab.tab === "actions" ? await formatActionsList(response) : formatTabAuto(response, OPTS.entityName);
         return {
           content: [{ type: "text" as const, text }],
         };

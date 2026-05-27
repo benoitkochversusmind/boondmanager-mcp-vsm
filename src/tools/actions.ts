@@ -445,6 +445,8 @@ Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type |
         resourceId,
         contactId,
         companyId,
+        period,
+        periodDynamic,
         ...rest
       } = params;
 
@@ -461,10 +463,22 @@ Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type |
         rest.keywords = rest.keywords ? `${linkedPrefixes.join(" ")} ${rest.keywords}` : linkedPrefixes.join(" ");
       }
 
+      // `period` and `periodDynamic` are destructured out so buildSearchQuery
+      // does NOT forward them unconditionally.
       const query = buildSearchQuery(rest);
       if (managerId) query.perimeterManagers = [managerId];
       if (dateFrom) query.startDate = dateFrom;
       if (dateTo) query.endDate = dateTo;
+
+      // CRITICAL: only send `period` when there is something for it to scope —
+      // a date bound (dateFrom/dateTo) or a dynamic window (periodDynamic).
+      // BoondManager interprets `period=started` WITHOUT any date window as an
+      // empty range and returns 0 results, so sending it on an unscoped
+      // candidateId-only search silently swallowed every action.
+      if (periodDynamic) query.periodDynamic = periodDynamic;
+      if (dateFrom || dateTo || periodDynamic) {
+        query.period = period; // schema default 'started' or caller's value
+      }
 
       // Explicit typeOf wins over actionType keyword lookup.
       let finalTypes = typeOf;

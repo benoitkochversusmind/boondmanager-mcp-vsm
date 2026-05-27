@@ -4,8 +4,10 @@ import {
   apiRequest,
   buildSearchQuery,
   fetchEntityWithInformation,
+  fetchTabResponse,
   formatListResponse,
   formatDetailResponse,
+  formatTabAuto,
 } from "../services/boond-client.js";
 import { SearchSchema, IdSchema, IdTabSchema } from "../schemas/index.js";
 import type { SearchInput, IdInput, IdTabInput } from "../schemas/index.js";
@@ -100,12 +102,19 @@ Returns: Données JSON complètes de l'entité (richesse maximale par défaut).`
       },
     },
     async (params: IdTabInput) => {
-      const response = params.tab
-        ? await apiRequest(`${opts.apiPath}/${params.id}/${params.tab}`)
-        : await fetchEntityWithInformation(`${opts.apiPath}/${params.id}`);
-      const text = formatDetailResponse(response);
+      if (params.tab) {
+        // Collection tabs (actions, positionings, projects, invoices…) are
+        // paginated server-side with a tiny default page size. fetchTabResponse
+        // walks all pages, and formatTabAuto renders the full list (instead of
+        // formatDetailResponse, which only ever showed data[0]).
+        const response = await fetchTabResponse(`${opts.apiPath}/${params.id}/${params.tab}`);
+        return {
+          content: [{ type: "text" as const, text: formatTabAuto(response, opts.entityName) }],
+        };
+      }
+      const response = await fetchEntityWithInformation(`${opts.apiPath}/${params.id}`);
       return {
-        content: [{ type: "text" as const, text }],
+        content: [{ type: "text" as const, text: formatDetailResponse(response) }],
       };
     }
   );

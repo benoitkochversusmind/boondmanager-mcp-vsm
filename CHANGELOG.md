@@ -3,6 +3,32 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.10.2] - 2026-05-27
+
+Correction de `boond_actions_create` qui retournait systématiquement HTTP 422 — la création d'action ne fonctionnait pas du tout. Diagnostic effectué en inspectant la vraie structure d'une action existante via `GET /actions/216050` plutôt qu'en se fiant à la doc.
+
+### Corrigé
+
+- **Bug — `boond_actions_create` échouait avec 422 « Missing required attribute (parameter: /data/relationships/dependsOn) »** (`src/tools/actions.ts`, `src/schemas/index.ts`).
+
+  Causes multiples identifiées :
+  1. **Relations mal construites** : le handler envoyait `relationships.contact`/`candidate`/`company`/`resource` mais l'API exige une relation polymorphe `dependsOn` dont le type varie selon l'entité parente (vérifié sur l'action 216050 : `dependsOn = { type: "candidate", id: "42893" }`).
+  2. **Aucune relation `mainManager`** alors que c'est la ressource responsable de l'action (le collaborateur — vu dans la donnée réelle : `mainManager = { type: "resource", id: "33650" }`).
+  3. **`typeOf` sérialisé comme string** alors que l'API stocke un integer (`typeOf: 17` dans la donnée réelle).
+  4. **Noms d'attributs incorrects** : le tool envoyait `subject` et `content`, l'API attend `title` et `text`.
+
+  Solution :
+  - **`dependsOn` construit depuis l'un des `contactId` / `candidateId` / `companyId` / `opportunityId` / `projectId` / `resourceId` fournis** (priorité dans cet ordre). Le `type` de la relation correspond automatiquement à l'entité — `{ type: "contact", id: "514" }` pour un contactId, `{ type: "candidate", id }` pour un candidateId, etc. Aucun ID lié fourni → erreur claire côté serveur avant l'appel API (au lieu d'un 422 opaque).
+  - **`mainManager` résolu automatiquement** depuis l'utilisateur courant : nouveau helper `resolveCurrentUserResourceId()` qui parse `thumbnail` de `/application/current-user` (pattern `resource_<id>_*`) — rien n'est codé en dur. Nouveau paramètre optionnel `mainManagerId` pour override explicite. Erreur claire si la résolution échoue.
+  - **`typeOf` accepte désormais `number` OU `string` numérique** (`"3"`, `3` ; cast vers integer avant l'API). Les aliases textuels (`"call"`, `"email"`, etc.) sont désormais rejetés par le schéma — ils ne fonctionnaient déjà pas en prod, le contrat est juste rendu explicite.
+  - **Mapping `subject` → `title` et `content` → `text`** : nouveau schéma documente `title`/`text` (noms canoniques BoondManager), conserve `subject`/`content` comme alias rétro-compatibles. Les noms canoniques gagnent en cas de double saisie.
+  - **Normalisation `startDate`/`endDate`** : `YYYY-MM-DD` → `YYYY-MM-DDT00:00:00+0200` (Europe/Paris). ISO 8601 complet passé tel quel.
+  - **Log du payload en niveau debug** pour faciliter le diagnostic des prochains rejets.
+
+### Tests
+
+- **+20 tests** : `src/tools/actions.test.ts` (16 nouveaux — construction `dependsOn` polymorphe pour 6 types d'entités, résolution `mainManager` auto vs explicite, normalisation `typeOf` numérique, erreurs claires sans entité liée et `typeOf` invalide, priorité contact > candidate > company, normalisation ISO startDate, alias `subject`/`content` → `title`/`text`, fallback thumbnail malformé, helper `resolveCurrentUserResourceId`), `src/schemas/index.test.ts` (4 ajustés — contrat `typeOf` numérique strict). **535 tests passants** (vs 515 en 1.10.1).
+
 ## [1.10.1] - 2026-05-27
 
 Deux corrections de bugs remontés en production sur les actions liées aux candidats.

@@ -8,6 +8,8 @@ import {
   parseDictionaryNode,
   mergeActionDictionary,
   resetActionTypeLabelsForTests,
+  handleActionCreate,
+  resolveCurrentUserResourceId,
   type ActionFormatContext,
 } from "./actions.js";
 import { ActionSearchSchema } from "../schemas/index.js";
@@ -522,5 +524,196 @@ describe("ActionSearchSchema (typeOf)", () => {
   it("rejects non-integer values", () => {
     expect(ActionSearchSchema.safeParse({ typeOf: ["12"] }).success).toBe(false);
     expect(ActionSearchSchema.safeParse({ typeOf: [12.5] }).success).toBe(false);
+  });
+});
+
+describe("handleActionCreate — dependsOn + mainManager (Bug fix)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // The current-user response shape used by resolveCurrentUserResourceId().
+  const CURRENT_USER_RESP = {
+    data: {
+      id: "1",
+      type: "currentuser",
+      attributes: {
+        firstName: "Benoit",
+        lastName: "KOCH",
+        thumbnail: "resource_42_895b910baa558f41c2f03cae63c8aa49d3142a17",
+      },
+    },
+  };
+
+  function mockApi(captured: { body?: unknown; path?: string; method?: string }) {
+    return vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, method, body) => {
+      if (path === "/application/current-user") return CURRENT_USER_RESP as never;
+      // /actions POST — capture the body for assertions
+      captured.path = path;
+      captured.method = method;
+      captured.body = body;
+      return {
+        data: { id: "999", type: "action", attributes: {}, relationships: {} },
+      } as never;
+    });
+  }
+
+  it("builds dependsOn={type:contact} from contactId (Bug : 422 dependsOn missing)", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({ typeOf: 3, contactId: "514", startDate: "2026-06-10" });
+    const body = captured.body as { data: { relationships: { dependsOn: { data: { id: string; type: string } } } } };
+    expect(body.data.relationships.dependsOn.data).toEqual({ id: "514", type: "contact" });
+  });
+
+  it("builds dependsOn={type:candidate} from candidateId", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({ typeOf: 17, candidateId: "42893" });
+    const body = captured.body as { data: { relationships: { dependsOn: { data: { id: string; type: string } } } } };
+    expect(body.data.relationships.dependsOn.data).toEqual({ id: "42893", type: "candidate" });
+  });
+
+  it("builds dependsOn for company / opportunity / project / resource too (polymorphic)", async () => {
+    const cases: Array<[Record<string, string>, { id: string; type: string }]> = [
+      [{ companyId: "100" }, { id: "100", type: "company" }],
+      [{ opportunityId: "200" }, { id: "200", type: "opportunity" }],
+      [{ projectId: "300" }, { id: "300", type: "project" }],
+      [{ resourceId: "400" }, { id: "400", type: "resource" }],
+    ];
+    for (const [extra, expected] of cases) {
+      const captured: { body?: unknown } = {};
+      mockApi(captured);
+      await handleActionCreate({ typeOf: 1, ...extra });
+      const body = captured.body as { data: { relationships: { dependsOn: { data: unknown } } } };
+      expect(body.data.relationships.dependsOn.data).toEqual(expected);
+    }
+  });
+
+  it("resolves mainManager from current user thumbnail when mainManagerId is omitted", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({ typeOf: 3, contactId: "514" });
+    const body = captured.body as { data: { relationships: { mainManager: { data: { id: string; type: string } } } } };
+    expect(body.data.relationships.mainManager.data).toEqual({ id: "42", type: "resource" });
+  });
+
+  it("uses explicit mainManagerId when provided (overrides current-user resolution)", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({ typeOf: 3, contactId: "514", mainManagerId: "33650" });
+    const body = captured.body as { data: { relationships: { mainManager: { data: { id: string; type: string } } } } };
+    expect(body.data.relationships.mainManager.data).toEqual({ id: "33650", type: "resource" });
+  });
+
+  it("accepts typeOf as numeric string ('3') and casts to integer", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({ typeOf: "3", contactId: "514" });
+    const body = captured.body as { data: { attributes: { typeOf: unknown } } };
+    expect(body.data.attributes.typeOf).toBe(3);
+    expect(typeof body.data.attributes.typeOf).toBe("number");
+  });
+
+  it("rejects an invalid typeOf with a clear error (not 422)", async () => {
+    mockApi({});
+    await expect(handleActionCreate({ typeOf: "abc", contactId: "514" })).rejects.toThrow(/typeOf/i);
+  });
+
+  it("throws a clear error when NO linked-entity ID is provided", async () => {
+    mockApi({});
+    await expect(handleActionCreate({ typeOf: 3 })).rejects.toThrow(/dependsOn|entité parente/i);
+  });
+
+  it("respects priority order : contactId beats candidateId/companyId when both given", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({ typeOf: 3, candidateId: "9", contactId: "514", companyId: "1" });
+    const body = captured.body as { data: { relationships: { dependsOn: { data: { type: string } } } } };
+    expect(body.data.relationships.dependsOn.data.type).toBe("contact");
+  });
+
+  it("normalises bare YYYY-MM-DD startDate to ISO with Paris offset", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({ typeOf: 3, contactId: "514", startDate: "2026-06-10" });
+    const body = captured.body as { data: { attributes: { startDate: string } } };
+    expect(body.data.attributes.startDate).toBe("2026-06-10T00:00:00+0200");
+  });
+
+  it("passes through ISO 8601 startDate untouched", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({ typeOf: 3, contactId: "514", startDate: "2026-06-10T14:30:00+0200" });
+    const body = captured.body as { data: { attributes: { startDate: string } } };
+    expect(body.data.attributes.startDate).toBe("2026-06-10T14:30:00+0200");
+  });
+
+  it("maps subject → title and content → text (back-compat aliases)", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({
+      typeOf: 3,
+      contactId: "514",
+      subject: "Rappel relance",
+      content: "<p>À recontacter mardi</p>",
+    });
+    const body = captured.body as { data: { attributes: Record<string, string> } };
+    expect(body.data.attributes.title).toBe("Rappel relance");
+    expect(body.data.attributes.text).toBe("<p>À recontacter mardi</p>");
+    expect(body.data.attributes).not.toHaveProperty("subject");
+    expect(body.data.attributes).not.toHaveProperty("content");
+  });
+
+  it("title/text wins over subject/content when both provided", async () => {
+    const captured: { body?: unknown } = {};
+    mockApi(captured);
+    await handleActionCreate({
+      typeOf: 3,
+      contactId: "514",
+      title: "Canonique",
+      subject: "Alias",
+      text: "Body canonique",
+      content: "Body alias",
+    });
+    const body = captured.body as { data: { attributes: Record<string, string> } };
+    expect(body.data.attributes.title).toBe("Canonique");
+    expect(body.data.attributes.text).toBe("Body canonique");
+  });
+
+  it("throws a clear error when current-user thumbnail cannot be parsed (no mainManagerId fallback)", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path === "/application/current-user") {
+        return {
+          data: { id: "1", type: "currentuser", attributes: { thumbnail: "garbage_no_resource" } },
+        } as never;
+      }
+      return { data: {} } as never;
+    });
+    await expect(handleActionCreate({ typeOf: 3, contactId: "514" })).rejects.toThrow(/mainManagerId|current/i);
+  });
+});
+
+describe("resolveCurrentUserResourceId", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("parses the numeric resource id from the thumbnail prefix", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
+      data: {
+        id: "1",
+        type: "currentuser",
+        attributes: { thumbnail: "resource_42_8abc" },
+      },
+    } as never);
+    expect(await resolveCurrentUserResourceId()).toBe("42");
+  });
+
+  it("returns null when thumbnail is missing or malformed", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
+      data: { id: "1", type: "currentuser", attributes: {} },
+    } as never);
+    expect(await resolveCurrentUserResourceId()).toBeNull();
   });
 });

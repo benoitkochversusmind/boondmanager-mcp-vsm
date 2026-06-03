@@ -286,16 +286,41 @@ describe("ActionSearchSchema", () => {
 });
 
 describe("ActionCreateSchema", () => {
-  it("should accept valid action", () => {
+  it("accepts a numeric typeOf (canonical BoondManager shape)", () => {
     const result = ActionCreateSchema.safeParse({
-      typeOf: "call",
-      subject: "Appel de suivi",
+      typeOf: 3,
+      title: "Rappel de suivi",
+      contactId: "514",
     });
     expect(result.success).toBe(true);
   });
 
-  it("should require typeOf", () => {
+  it("accepts a stringified numeric typeOf and lets the handler cast it", () => {
+    expect(ActionCreateSchema.safeParse({ typeOf: "17", contactId: "514" }).success).toBe(true);
+  });
+
+  it("rejects non-numeric typeOf aliases (the API requires an integer ID)", () => {
+    // Pre-1.10.2 the schema typed `typeOf` as a free string and accepted "call",
+    // which silently failed at the API with 422. The new schema rejects that
+    // upfront, forcing callers to look up the right ID via the dictionary.
+    expect(ActionCreateSchema.safeParse({ typeOf: "call", contactId: "514" }).success).toBe(false);
+  });
+
+  it("requires typeOf", () => {
     expect(ActionCreateSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("accepts the back-compat subject/content aliases alongside the new title/text", () => {
+    expect(
+      ActionCreateSchema.safeParse({ typeOf: 3, subject: "Rappel", content: "<p>note</p>", contactId: "514" }).success
+    ).toBe(true);
+    expect(
+      ActionCreateSchema.safeParse({ typeOf: 3, title: "Rappel", text: "<p>note</p>", contactId: "514" }).success
+    ).toBe(true);
+  });
+
+  it("accepts mainManagerId as an optional override", () => {
+    expect(ActionCreateSchema.safeParse({ typeOf: 3, contactId: "514", mainManagerId: "33650" }).success).toBe(true);
   });
 });
 

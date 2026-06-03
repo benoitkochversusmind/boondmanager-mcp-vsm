@@ -5,7 +5,6 @@ import { CHARACTER_LIMIT } from "../constants.js";
 import { getDictionary, resolveDictionaryPath } from "../services/dictionary.js";
 import { logger } from "../services/logger.js";
 import type { JsonApiResource, JsonApiResponse } from "../types.js";
-import { buildJsonApiBody } from "./crud-factory.js";
 
 // Per-action soft cap on the `text` field. Action notes can be paragraphs;
 // the list view stays readable if we trim each one. Callers needing the full
@@ -395,6 +394,156 @@ const KEYWORD_TO_TYPES: Record<string, number[]> = {
   recrutement: [34],
 };
 
+// ---- Action creation helpers ----------------------------------------------
+// Bound by the actual API shape verified live on 2026-05-27 :
+//   GET /actions/216050 returns
+//     attributes.typeOf      : integer (not string)
+//     attributes.title, text : the real attribute names (not subject/content)
+//     attributes.startDate   : ISO 8601 with offset, e.g. "2026-05-11T14:00:00+0200"
+//     relationships.dependsOn: { data: { id, type: <linked-entity-type> } } — REQUIRED, polymorphic
+//     relationships.mainManager: { data: { id, type: "resource" } } — the responsible collaborator
+//
+// The previous create handler sent neither dependsOn nor mainManager (and used
+// the wrong attribute names), so every POST /actions returned 422 Missing
+// required attribute (parameter: /data/relationships/dependsOn).
+
+const ACTION_DEPENDS_ON_PRIORITY = [
+  { key: "contactId", type: "contact" },
+  { key: "candidateId", type: "candidate" },
+  { key: "companyId", type: "company" },
+  { key: "opportunityId", type: "opportunity" },
+  { key: "projectId", type: "project" },
+  { key: "resourceId", type: "resource" },
+] as const;
+
+/**
+ * Resolve the BoondManager resource ID corresponding to the current
+ * authenticated user. /application/current-user returns the user record with
+ * a `thumbnail` field of the form `resource_<id>_<hash>` — we parse the
+ * numeric id out of that prefix.
+ *
+ * This is NOT hardcoded : in multi-user OAuth mode each request carries its
+ * own JWT via AsyncLocalStorage, so the call always returns the right user
+ * for the current context. Returns null if the thumbnail cannot be parsed.
+ */
+export async function resolveCurrentUserResourceId(): Promise<string | null> {
+  const resp = await apiRequest("/application/current-user");
+  const data = Array.isArray(resp.data) ? resp.data[0] : resp.data;
+  if (!data) return null;
+  const attrs = (data.attributes ?? {}) as Record<string, unknown>;
+  const thumbnail = attrs["thumbnail"];
+  if (typeof thumbnail === "string") {
+    const m = thumbnail.match(/^resource_(\d+)_/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/**
+ * Normalise the user-supplied date into an ISO 8601 string with offset that
+ * BoondManager accepts. Pass-through for already-formatted ISO inputs; we
+ * only expand bare `YYYY-MM-DD` to midnight Europe/Paris.
+ */
+function normaliseActionDate(input: string | undefined): string | undefined {
+  if (!input) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    // Bare date — append midnight Europe/Paris. Boond stores startTimezone
+    // separately, so the offset here is for clarity rather than DST safety.
+    return `${input}T00:00:00+0200`;
+  }
+  return input;
+}
+
+interface ActionCreateInput {
+  typeOf: number | string;
+  title?: string;
+  text?: string;
+  subject?: string;
+  content?: string;
+  startDate?: string;
+  endDate?: string;
+  candidateId?: string;
+  resourceId?: string;
+  contactId?: string;
+  companyId?: string;
+  opportunityId?: string;
+  projectId?: string;
+  mainManagerId?: string;
+}
+
+export async function handleActionCreate(params: ActionCreateInput): Promise<string> {
+  // ---- typeOf : accept number or numeric string, send as integer ----
+  const typeOfNum = typeof params.typeOf === "number" ? params.typeOf : Number(params.typeOf);
+  if (!Number.isFinite(typeOfNum) || typeOfNum < 0) {
+    throw new Error(
+      `Paramètre invalide : 'typeOf' doit être un ID numérique d'action (ex : 3, 17, 41). Reçu : ${JSON.stringify(params.typeOf)}.`
+    );
+  }
+
+  // ---- dependsOn : pick the first provided linked entity (priority order) ----
+  let dependsOn: { id: string; type: string } | null = null;
+  const paramsBag = params as unknown as Record<string, unknown>;
+  for (const { key, type } of ACTION_DEPENDS_ON_PRIORITY) {
+    const id = paramsBag[key];
+    if (typeof id === "string" && id.length > 0) {
+      dependsOn = { id, type };
+      break;
+    }
+  }
+  if (!dependsOn) {
+    throw new Error(
+      "Paramètre manquant : précisez l'entité parente de l'action via UN parmi " +
+        "contactId, candidateId, companyId, opportunityId, projectId, resourceId. " +
+        "Sans cet identifiant, l'API BoondManager renvoie 422 (Missing required attribute dependsOn)."
+    );
+  }
+
+  // ---- mainManager : explicit or resolved from current user ----
+  let mainManagerId = params.mainManagerId;
+  if (!mainManagerId) {
+    const resolved = await resolveCurrentUserResourceId();
+    if (!resolved) {
+      throw new Error(
+        "Impossible de résoudre la ressource du collaborateur courant (`/application/current-user.thumbnail` " +
+          "non au format `resource_<id>_*`). Fournissez explicitement `mainManagerId` " +
+          "(ID de la ressource responsable de l'action) pour contourner."
+      );
+    }
+    mainManagerId = resolved;
+  }
+
+  // ---- Attributes ----
+  const attributes: Record<string, unknown> = { typeOf: typeOfNum };
+  // Real BoondManager attribute names are `title` and `text`. Accept the
+  // legacy subject/content as back-compat aliases.
+  const titleVal = params.title ?? params.subject;
+  const textVal = params.text ?? params.content;
+  if (titleVal) attributes.title = titleVal;
+  if (textVal) attributes.text = textVal;
+  const startDate = normaliseActionDate(params.startDate);
+  const endDate = normaliseActionDate(params.endDate);
+  if (startDate) attributes.startDate = startDate;
+  if (endDate) attributes.endDate = endDate;
+
+  // ---- JSON:API body ----
+  const body = {
+    data: {
+      type: "action",
+      attributes,
+      relationships: {
+        dependsOn: { data: { id: dependsOn.id, type: dependsOn.type } },
+        mainManager: { data: { id: mainManagerId, type: "resource" } },
+      },
+    },
+  };
+
+  logger.debug({ body }, "POST /actions payload");
+
+  const response = await apiRequest("/actions", "POST", body);
+  const entity = Array.isArray(response.data) ? response.data[0] : response.data;
+  return `✅ Action créée avec succès.\nID : ${entity?.id}\nType : ${typeOfNum}\nDépend de : ${dependsOn.type} #${dependsOn.id}\nResponsable : resource #${mainManagerId}\n\n${formatDetailResponse(response)}`;
+}
+
 export function registerActionTools(server: McpServer): void {
   // Search actions
   server.registerTool(
@@ -524,7 +673,17 @@ Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type |
     "boond_actions_create",
     {
       title: "Créer une action",
-      description: `Crée une nouvelle action (appel, email, RDV, note) dans BoondManager, optionnellement liée à un candidat, ressource, contact ou société.`,
+      description: `Crée une nouvelle action (appel, email, RDV, note, rappel...) dans BoondManager.
+
+**Requis** : \`typeOf\` (ID numérique du type d'action) + UN identifiant d'entité liée parmi \`contactId\`, \`candidateId\`, \`companyId\`, \`opportunityId\`, \`projectId\`, \`resourceId\`. Cette entité construit la relation \`dependsOn\` (polymorphe) que l'API BoondManager exige.
+
+**Responsable** : \`mainManagerId\` (ID de la ressource collaborateur). Si omis, le tool résout automatiquement la ressource de l'utilisateur courant via \`/application/current-user\` (parsing du \`thumbnail\` \`resource_<id>_*\`).
+
+**Dates** : \`startDate\` accepte \`YYYY-MM-DD\` (normalisé à minuit Europe/Paris) ou ISO 8601 complet.
+
+**Type d'action** : pour la liste exhaustive des IDs, voir \`boond_application_dictionary\` avec \`setting.action.<entity>\` (scopé par contact/candidate/resource/opportunity/project/order/invoice).
+
+Erreurs claires : si aucune entité liée fournie OU si la ressource utilisateur ne peut être résolue.`,
       inputSchema: ActionCreateSchema,
       annotations: {
         readOnlyHint: false,
@@ -534,26 +693,8 @@ Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type |
       },
     },
     async (params) => {
-      const { candidateId, resourceId, contactId, companyId, ...attrs } = params;
-      const body = buildJsonApiBody("action", attrs);
-      const relationships: Record<string, unknown> = {};
-      if (candidateId) relationships.candidate = { data: { id: candidateId, type: "candidate" } };
-      if (resourceId) relationships.resource = { data: { id: resourceId, type: "resource" } };
-      if (contactId) relationships.contact = { data: { id: contactId, type: "contact" } };
-      if (companyId) relationships.company = { data: { id: companyId, type: "company" } };
-      if (Object.keys(relationships).length > 0) {
-        (body as Record<string, Record<string, unknown>>).data.relationships = relationships;
-      }
-      const response = await apiRequest("/actions", "POST", body);
-      const entity = Array.isArray(response.data) ? response.data[0] : response.data;
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `✅ Action créée avec succès.\nID: ${entity?.id}\n\n${formatDetailResponse(response)}`,
-          },
-        ],
-      };
+      const created = await handleActionCreate(params);
+      return { content: [{ type: "text" as const, text: created }] };
     }
   );
 

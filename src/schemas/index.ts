@@ -723,15 +723,51 @@ export const ActionSearchSchema = z
 
 export const ActionCreateSchema = z
   .object({
-    typeOf: z.string().min(1).describe("Type d'action (ex: call, email, meeting, note)"),
-    subject: z.string().optional().describe("Sujet de l'action"),
-    content: z.string().optional().describe("Contenu / description"),
-    startDate: z.string().optional().describe("Date de début (YYYY-MM-DD ou ISO)"),
-    endDate: z.string().optional().describe("Date de fin"),
-    candidateId: z.string().optional().describe("ID du candidat associé"),
-    resourceId: z.string().optional().describe("ID de la ressource associée"),
-    contactId: z.string().optional().describe("ID du contact associé"),
-    companyId: z.string().optional().describe("ID de la société associée"),
+    // BoondManager stores typeOf as an **integer** (e.g. 3 = "Rappel / To do",
+    // 17 = "1 bis - (Re)prise de contact", 61 = "1 - Prospection Appel"...).
+    // We accept either a number or a numeric string and cast to number before
+    // hitting the API. Use `boond_application_dictionary` with
+    // `setting.action.{contact|candidate|resource|...}` to list the IDs.
+    typeOf: z
+      .union([z.number().int(), z.string().regex(/^\d+$/)])
+      .describe(
+        "ID numérique du type d'action (ex: 3=Rappel / To do, 17=Reprise de contact, 41=Appel, 42=Email, 61=Prospection Appel). " +
+          "Lister les IDs via `boond_application_dictionary` avec `setting.action.<entity>` (contact, candidate, resource, opportunity, project, order, invoice)."
+      ),
+    title: z.string().optional().describe("Titre de l'action (attribut `title` BoondManager)."),
+    text: z.string().optional().describe("Contenu / description HTML de l'action (attribut `text` BoondManager)."),
+    // Back-compat aliases — the previous schema accepted these names, but the
+    // BoondManager attributes are actually `title` and `text`. We forward
+    // subject→title and content→text in the handler so existing callers still
+    // work, while documenting the canonical names.
+    subject: z.string().optional().describe("Alias rétro-compatible de `title`."),
+    content: z.string().optional().describe("Alias rétro-compatible de `text`."),
+    startDate: z
+      .string()
+      .optional()
+      .describe(
+        "Date / horaire de début. Accepté : `YYYY-MM-DD` (normalisé à minuit Europe/Paris) ou ISO 8601 complet."
+      ),
+    endDate: z.string().optional().describe("Date / horaire de fin (même formats que `startDate`)."),
+    // ---- Linked-entity relationships ----
+    // BoondManager exige UNE relation `dependsOn` polymorphe. On la construit
+    // depuis le premier de ces IDs renseigné (priorité : contact > candidate >
+    // company > opportunity > project > resource). Sans aucun, l'API renvoie
+    // 422 Missing required attribute dependsOn — on lève une erreur claire
+    // côté serveur avant l'appel.
+    candidateId: z.string().optional().describe("ID du candidat lié (dépose l'action sur ce candidat)."),
+    resourceId: z.string().optional().describe("ID de la ressource liée (collaborateur interne)."),
+    contactId: z.string().optional().describe("ID du contact lié (action commerciale sur un contact)."),
+    companyId: z.string().optional().describe("ID de la société liée."),
+    opportunityId: z.string().optional().describe("ID de l'opportunité liée."),
+    projectId: z.string().optional().describe("ID du projet lié."),
+    mainManagerId: z
+      .string()
+      .optional()
+      .describe(
+        "ID de la ressource responsable de l'action. Défaut : la ressource correspondant à l'utilisateur courant " +
+          "(résolue via `/application/current-user.thumbnail` → `resource_<id>_*`). Lever une erreur explicite si non résolvable."
+      ),
   })
   .strict();
 

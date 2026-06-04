@@ -3,7 +3,7 @@
 > Auto-generated from the server registrations. Do not edit by hand.
 > Regenerate with `npm run docs:tools` (CI fails if this file is stale).
 
-**169 tools** across **37 domains** · **12 prompts** · **21 resources**.
+**170 tools** across **37 domains** · **12 prompts** · **21 resources**.
 
 Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destructiveHint), `idempotent` (idempotentHint), `open-world` (openWorldHint, e.g. paginated keyword search).
 
@@ -283,7 +283,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_reporting_resources` | Reporting ressources | read · idempotent · open-world |
 | `boond_reporting_synthesis` | Reporting synthèse | read · idempotent · open-world |
 
-### resources (16)
+### resources (17)
 
 | Tool | Title | Hints |
 |---|---|---|
@@ -296,6 +296,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_resources_expenses_reports` | Notes de frais d'une ressource | read · idempotent |
 | `boond_resources_get` | Détails d'un(e) ressource | read · idempotent |
 | `boond_resources_information` | Informations générales d'une ressource | read · idempotent |
+| `boond_resources_missions_history` | Historique des missions d'un consultant | read · idempotent · open-world |
 | `boond_resources_positionings` | Positionnements d'une ressource | read · idempotent |
 | `boond_resources_projects` | Projets d'une ressource | read · idempotent |
 | `boond_resources_search` | Rechercher des ressources | read · idempotent · open-world |

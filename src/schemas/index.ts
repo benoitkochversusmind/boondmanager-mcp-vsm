@@ -771,6 +771,43 @@ export const ActionCreateSchema = z
   })
   .strict();
 
+// ---- Resource missions history (composite) ----
+
+export const ResourceMissionsHistorySchema = z
+  .object({
+    resourceId: z
+      .string()
+      .min(1)
+      .describe("ID numérique de la ressource (consultant) dont on veut l'historique de missions."),
+    withProjectDates: z
+      .boolean()
+      .optional()
+      .describe(
+        "Si true (défaut), fetch chaque projet individuellement pour récupérer `startDate`. " +
+          "Coût : 1 GET /projects/{id} par mission. Mettre `false` pour gagner du temps quand seul le nom client compte."
+      ),
+    groupByCompany: z
+      .boolean()
+      .optional()
+      .describe(
+        "Si true (défaut), regroupe la sortie par société cliente, triée par nombre de missions décroissant " +
+          "puis par mission la plus récente. Si false, sortie en liste plate triée par `startDate` décroissante."
+      ),
+    maxEnrichments: z
+      .number()
+      .int()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        "Plafond du nombre de GET parallèles (sociétés + projets) pour borner la latence. Défaut : 100. " +
+          "Au-delà, les missions excédentaires sont listées avec leur ID seulement (drill manuel via `boond_projects_get`)."
+      ),
+  })
+  .strict();
+
+export type ResourceMissionsHistoryInput = z.infer<typeof ResourceMissionsHistorySchema>;
+
 // ---- Timesheet schemas ----
 
 export const ResourceTimesheetSchema = z

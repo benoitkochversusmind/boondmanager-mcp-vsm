@@ -3,6 +3,33 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.11.0] - 2026-06-04
+
+Nouvel outil composite **`boond_resources_missions_history`** — historique complet des missions d'un consultant en un seul appel, avec résolution automatique du nom des sociétés clientes et de la date de début de chaque mission. Répond au cas d'usage « toutes les missions et tous les clients sur lesquels un consultant a travaillé ».
+
+### Ajouté
+
+- **Tool `boond_resources_missions_history`** (`src/tools/resources.ts`) — orchestre côté serveur :
+  1. `/resources/{resourceId}/projects` paginé (réutilise `fetchTabResponse` v1.10.3 — toutes les missions du consultant, plus seulement la première).
+  2. Résolution du nom client via `GET /companies/{id}` (dédup par société + parallèle + cap `maxEnrichments`).
+  3. Si `withProjectDates: true` (défaut), enrichissement de chaque projet via `GET /projects/{id}` pour récupérer `attributes.startDate` (le tab `/resources/projects` n'expose pas les dates).
+  4. Tri par date de mission décroissante.
+  5. Sortie groupée par société (par défaut, top clients en premier) ou en liste plate.
+- **Schéma `ResourceMissionsHistorySchema`** (`src/schemas/index.ts`) avec `resourceId` (requis), `withProjectDates` (défaut true), `groupByCompany` (défaut true), `maxEnrichments` (1-200, défaut 100).
+- **Helper exporté `fetchResourceMissionsHistory(params)`** pour les tests et la réutilisation. Helper interne `batchedLookup` pour les fetches parallèles dédupliqués avec cap.
+- **Labels de type projet par défaut** (Régie, TJM forfaité, Forfait, Abonnement, Interne / formation) résolus en clair dans la sortie quand `typeOf` est connu.
+
+### Cas d'usage débloqué (sur la ressource Damien BLAISE #20)
+
+Avant : agent devait orchestrer manuellement 1 GET projects + 19 GET projects/{id} + ~12 GET companies/{id} = 32 appels MCP côté agent.
+
+Après v1.11.0 : 1 seul appel `boond_resources_missions_history(resourceId="20")` renvoie un tableau structuré « 19 missions sur 12 sociétés (2018→2026), groupé par client » prêt à exploiter (génération CV interne, audit d'expérience, cartographie clients).
+
+### Tests
+
+- **+6 tests** dans `src/tools/resources.test.ts` (suite `fetchResourceMissionsHistory`) : agrégation projects + résolution noms + startDates en un appel, dédup company GETs (3 projets sur 1 société → 1 GET company), skip enrichissement projet quand `withProjectDates: false` (économie N appels), résultat vide pour consultant sans projet, cap `maxEnrichments` honoré. Test `registerResourceTools` mis à jour : 15 → 16 outils. **545 tests passants** (vs 539 en 1.10.3).
+- **TOOLS.md** régénéré : **170 tools** (vs 169 en 1.10.3), 12 prompts, 21 resources.
+
 ## [1.10.3] - 2026-06-03
 
 Généralisation du fix v1.10.1 (`Bug 1 : pagination des onglets`) aux 5 autres modules à onglets. En v1.10.1 le correctif n'avait été appliqué qu'à `candidates.ts` (et au `_get` mergé via `registerGetToolMerged`) ; les onglets dédiés des autres entités utilisaient encore le pattern bugué `apiRequest + formatDetailResponse(data[0])`. Reproduit en prod sur la ressource Damien BLAISE (#20, consultant depuis 6+ ans) :

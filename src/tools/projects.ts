@@ -1,6 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProjectCreateSchema, ProjectUpdateSchema, ProjectSearchSchema, IdSchema } from "../schemas/index.js";
-import type { IdInput } from "../schemas/index.js";
 import {
   registerSearchTool,
   registerGetTool,
@@ -8,8 +7,8 @@ import {
   registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
+  buildTabHandler,
 } from "./crud-factory.js";
-import { apiRequest, formatDetailResponse } from "../services/boond-client.js";
 
 const OPTS = {
   entityName: "projet",
@@ -156,7 +155,7 @@ export function registerProjectTools(server: McpServer): void {
 
   registerDeleteTool(server, OPTS);
 
-  // Register one tool per project tab
+  // Register one tool per project tab (paginated + auto list/detail formatter — cf. 1.10.3).
   for (const tab of PROJECT_TABS) {
     server.registerTool(
       `boond_projects_${tab.name}`,
@@ -166,13 +165,7 @@ export function registerProjectTools(server: McpServer): void {
         inputSchema: IdSchema,
         annotations: TAB_TOOL_ANNOTATIONS,
       },
-      async (params: IdInput) => {
-        const response = await apiRequest(`/projects/${params.id}/${tab.tab}`);
-        const text = formatDetailResponse(response);
-        return {
-          content: [{ type: "text" as const, text }],
-        };
-      }
+      buildTabHandler(OPTS.apiPath, OPTS.entityName, tab.tab)
     );
   }
 }

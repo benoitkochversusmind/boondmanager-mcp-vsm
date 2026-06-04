@@ -1,22 +1,16 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CandidateCreateSchema, CandidateUpdateSchema, CandidateSearchSchema, IdSchema } from "../schemas/index.js";
-import type { CandidateSearchInput, IdInput } from "../schemas/index.js";
+import type { CandidateSearchInput } from "../schemas/index.js";
 import {
   registerGetToolMerged,
   registerCreateTool,
   registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
+  buildTabHandler,
 } from "./crud-factory.js";
-import {
-  apiRequest,
-  buildSearchQuery,
-  fetchTabResponse,
-  formatListResponse,
-  formatTabAuto,
-} from "../services/boond-client.js";
+import { apiRequest, buildSearchQuery, formatListResponse } from "../services/boond-client.js";
 import { getStateMap } from "../services/dictionary.js";
-import { formatActionsList } from "./actions.js";
 import type { JsonApiResource, JsonApiResponse } from "../types.js";
 
 const OPTS = {
@@ -214,7 +208,8 @@ export function registerCandidateTools(server: McpServer): void {
 
   registerDeleteTool(server, OPTS);
 
-  // Register one tool per candidate tab
+  // Register one tool per candidate tab via the shared `buildTabHandler`
+  // (pagination + auto list/detail + enriched actions formatter — cf. 1.10.3).
   for (const tab of CANDIDATE_TABS) {
     server.registerTool(
       `boond_candidates_${tab.name}`,
@@ -224,19 +219,7 @@ export function registerCandidateTools(server: McpServer): void {
         inputSchema: IdSchema,
         annotations: TAB_TOOL_ANNOTATIONS,
       },
-      async (params: IdInput) => {
-        // Tab collections (actions, positionings) are paginated server-side
-        // with a very low default page size — fetchTabResponse walks all pages.
-        const response = await fetchTabResponse(`/candidates/${params.id}/${tab.tab}`);
-        // The actions tab gets the enriched formatter (HTML strip, typeLabel,
-        // manager + linked entity resolution) ; other collection tabs use the
-        // generic list/detail auto-formatter.
-        const text =
-          tab.tab === "actions" ? await formatActionsList(response) : formatTabAuto(response, OPTS.entityName);
-        return {
-          content: [{ type: "text" as const, text }],
-        };
-      }
+      buildTabHandler(OPTS.apiPath, OPTS.entityName, tab.tab)
     );
   }
 }

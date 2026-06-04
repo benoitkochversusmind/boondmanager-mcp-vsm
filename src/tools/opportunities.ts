@@ -5,7 +5,6 @@ import {
   OpportunitySearchSchema,
   IdSchema,
 } from "../schemas/index.js";
-import type { IdInput } from "../schemas/index.js";
 import {
   registerSearchTool,
   registerGetToolMerged,
@@ -13,8 +12,8 @@ import {
   registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
+  buildTabHandler,
 } from "./crud-factory.js";
-import { apiRequest, formatDetailResponse } from "../services/boond-client.js";
 
 const OPTS = {
   entityName: "opportunité",
@@ -138,7 +137,7 @@ export function registerOpportunityTools(server: McpServer): void {
 
   registerDeleteTool(server, OPTS);
 
-  // Register one tool per opportunity tab
+  // Register one tool per opportunity tab (paginated + auto list/detail formatter — cf. 1.10.3).
   for (const tab of OPPORTUNITY_TABS) {
     server.registerTool(
       `boond_opportunities_${tab.name}`,
@@ -148,13 +147,7 @@ export function registerOpportunityTools(server: McpServer): void {
         inputSchema: IdSchema,
         annotations: TAB_TOOL_ANNOTATIONS,
       },
-      async (params: IdInput) => {
-        const response = await apiRequest(`/opportunities/${params.id}/${tab.tab}`);
-        const text = formatDetailResponse(response);
-        return {
-          content: [{ type: "text" as const, text }],
-        };
-      }
+      buildTabHandler(OPTS.apiPath, OPTS.entityName, tab.tab)
     );
   }
 }

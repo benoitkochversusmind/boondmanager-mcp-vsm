@@ -1,6 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CompanyCreateSchema, CompanyUpdateSchema, CompanySearchSchema, IdSchema } from "../schemas/index.js";
-import type { IdInput } from "../schemas/index.js";
 import {
   registerSearchTool,
   registerGetToolMerged,
@@ -8,9 +7,8 @@ import {
   registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
+  buildTabHandler,
 } from "./crud-factory.js";
-import { apiRequest, formatDetailResponse } from "../services/boond-client.js";
-import { formatActionsList } from "./actions.js";
 
 const OPTS = {
   entityName: "société",
@@ -172,7 +170,11 @@ export function registerCompanyTools(server: McpServer): void {
 
   registerDeleteTool(server, OPTS);
 
-  // Register one tool per company tab
+  // Register one tool per company tab. `buildTabHandler` route automatiquement
+  // l'onglet `actions` vers `formatActionsList` (HTML strip + dépendances
+  // résolues), pagine les onglets-collection (opportunities, projects, orders,
+  // invoices, purchases, provider-invoices…) jusqu'au total, et tombe sur
+  // formatDetailResponse pour les onglets mono-entité (information…).
   for (const tab of COMPANY_TABS) {
     server.registerTool(
       `boond_companies_${tab.name}`,
@@ -182,17 +184,7 @@ export function registerCompanyTools(server: McpServer): void {
         inputSchema: IdSchema,
         annotations: TAB_TOOL_ANNOTATIONS,
       },
-      async (params: IdInput) => {
-        const response = await apiRequest(`/companies/${params.id}/${tab.tab}`);
-        // The /companies/{id}/actions tab benefits from the enriched action
-        // formatter (HTML strip, typeLabel via dictionary, mainManager name,
-        // dependsOn entity resolution) — same shape returned by
-        // boond_actions_search.
-        const text = tab.name === "actions" ? await formatActionsList(response) : formatDetailResponse(response);
-        return {
-          content: [{ type: "text" as const, text }],
-        };
-      }
+      buildTabHandler(OPTS.apiPath, OPTS.entityName, tab.tab)
     );
   }
 }

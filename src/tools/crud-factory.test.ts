@@ -2,12 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   buildJsonApiBody,
+  buildTabHandler,
   registerSearchTool,
   registerGetTool,
   registerCreateTool,
   registerUpdateTool,
   registerDeleteTool,
 } from "./crud-factory.js";
+import * as boondClient from "../services/boond-client.js";
+import * as dictionaryService from "../services/dictionary.js";
 import { z } from "zod";
 
 function createMockServer() {
@@ -163,5 +166,79 @@ describe("registerDeleteTool", () => {
     registerDeleteTool(server, OPTS);
     const [, metadata] = vi.mocked(server.registerTool).mock.calls[0];
     expect(metadata.annotations?.destructiveHint).toBe(true);
+  });
+});
+
+// ---- Transverse tab-pagination fix (1.10.3) -------------------------------
+
+describe("buildTabHandler — pagination + auto formatter on every collection tab", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    dictionaryService.resetDictionaryCacheForTests();
+  });
+
+  // Note : `fetchTabResponse` calls the module-internal `apiRequest`, which a
+  // spy on the export can't intercept. We mock `fetchTabResponse` itself, and
+  // assert on the path it receives. Pagination + maxResults are covered by
+  // dedicated tests in boond-client.test.ts.
+
+  it("calls fetchTabResponse with the entity tab path (no more bare apiRequest+formatDetailResponse)", async () => {
+    const tabSpy = vi.spyOn(boondClient, "fetchTabResponse").mockResolvedValue({
+      data: [],
+      meta: { totals: { rows: 0 } },
+    } as never);
+    await buildTabHandler("/resources", "ressource", "projects")({ id: "20" });
+    expect(tabSpy).toHaveBeenCalledWith("/resources/20/projects");
+  });
+
+  it("renders ALL collection rows (not just data[0]) for a multi-row tab", async () => {
+    vi.spyOn(boondClient, "fetchTabResponse").mockResolvedValue({
+      data: Array.from({ length: 6 }, (_, i) => ({
+        id: String(100 + i),
+        type: "project",
+        attributes: { reference: `MISSION-${i + 1}`, name: `Client #${i + 1}` },
+      })),
+      meta: { totals: { rows: 6 } },
+    } as never);
+    const out = await buildTabHandler("/resources", "ressource", "projects")({ id: "20" });
+    const text = out.content[0].text;
+    expect(text).toContain("Total: 6 ressource(s)");
+    expect(text).toContain("#100");
+    // Last row : pre-1.10.3 this row was DROPPED by formatDetailResponse(data[0]).
+    // The fix is that the full list now renders.
+    expect(text).toContain("#105");
+  });
+
+  it("uses the enriched action formatter when tabName === 'actions'", async () => {
+    vi.spyOn(dictionaryService, "getDictionary").mockResolvedValue({
+      payload: { data: { setting: { action: {} } } },
+      fetchedAt: Date.now(),
+      language: "fr",
+    } as never);
+    vi.spyOn(boondClient, "fetchTabResponse").mockResolvedValue({
+      data: [
+        {
+          id: "1",
+          type: "action",
+          attributes: { typeOf: 13, startDate: "2026-06-01", text: "<p>Note</p>" },
+        },
+      ],
+      meta: { totals: { rows: 1 } },
+    } as never);
+    const out = await buildTabHandler("/companies", "société", "actions")({ id: "100" });
+    const text = out.content[0].text;
+    // Enriched formatter : [action #N] | date | typeLabel | ... and HTML stripped.
+    expect(text).toContain("[action #1]");
+    expect(text).toContain("2026-06-01");
+    expect(text).not.toContain("<p>");
+  });
+
+  it("falls back to detail view for single-entity tabs (information, technical-data...)", async () => {
+    vi.spyOn(boondClient, "fetchTabResponse").mockResolvedValue({
+      data: { id: "20", type: "resource", attributes: { firstName: "Damien", lastName: "BLAISE" } },
+    } as never);
+    const out = await buildTabHandler("/resources", "ressource", "information")({ id: "20" });
+    const text = out.content[0].text;
+    expect(text).toContain('"firstName": "Damien"');
   });
 });

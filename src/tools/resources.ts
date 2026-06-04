@@ -1,6 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ResourceCreateSchema, ResourceUpdateSchema, ResourceSearchSchema, IdSchema } from "../schemas/index.js";
-import type { IdInput } from "../schemas/index.js";
 import {
   registerSearchTool,
   registerGetTool,
@@ -8,8 +7,8 @@ import {
   registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
+  buildTabHandler,
 } from "./crud-factory.js";
-import { apiRequest, formatDetailResponse } from "../services/boond-client.js";
 
 const OPTS = {
   entityName: "ressource",
@@ -183,7 +182,10 @@ export function registerResourceTools(server: McpServer): void {
 
   registerDeleteTool(server, OPTS);
 
-  // Register one tool per resource tab
+  // Register one tool per resource tab. The shared `buildTabHandler` pagines
+  // les onglets-collection (projects, positionings, times-reports, deliveries,
+  // actions...) jusqu'à `meta.totals.rows` et rend la liste complète au lieu
+  // du seul `data[0]` — cf. fix transverse 1.10.3.
   for (const tab of RESOURCE_TABS) {
     server.registerTool(
       `boond_resources_${tab.name}`,
@@ -193,13 +195,7 @@ export function registerResourceTools(server: McpServer): void {
         inputSchema: IdSchema,
         annotations: TAB_TOOL_ANNOTATIONS,
       },
-      async (params: IdInput) => {
-        const response = await apiRequest(`/resources/${params.id}/${tab.tab}`);
-        const text = formatDetailResponse(response);
-        return {
-          content: [{ type: "text" as const, text }],
-        };
-      }
+      buildTabHandler(OPTS.apiPath, OPTS.entityName, tab.tab)
     );
   }
 }

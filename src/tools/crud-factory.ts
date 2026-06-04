@@ -11,12 +11,47 @@ import {
 } from "../services/boond-client.js";
 import { SearchSchema, IdSchema, IdTabSchema } from "../schemas/index.js";
 import type { SearchInput, IdInput, IdTabInput } from "../schemas/index.js";
+import { formatActionsList } from "./actions.js";
 
 interface CrudToolOptions {
   entityName: string; // ex: "candidat", "ressource"
   entityNamePlural: string; // ex: "candidats", "ressources"
   apiPath: string; // ex: "/candidates"
   prefix: string; // ex: "boond_candidates"
+}
+
+/**
+ * Builds the async handler for a tab tool (e.g. `boond_resources_projects`).
+ *
+ * Every tab tool used to call `apiRequest(...) + formatDetailResponse(...)`
+ * which had two combined defects on collection tabs (positionings, projects,
+ * times-reports, deliveries, actions, ...) :
+ *   1. No `maxResults` query param → BoondManager applies a tiny server-side
+ *      default and returns 1 row of a list that may contain hundreds.
+ *   2. `formatDetailResponse` only serialises `data[0]` so the rows that DID
+ *      come back beyond the first are dropped before rendering.
+ *
+ * This helper fixes both for every tab in the codebase :
+ *   - `fetchTabResponse` requests `maxResults=500` and walks pages until
+ *     `meta.totals.rows` is covered (single-entity tabs short-circuit, no
+ *     extra HTTP).
+ *   - `formatTabAuto` renders the full list when the response is a
+ *     collection, and falls back to `formatDetailResponse` for single
+ *     entities (information / technical-data / administrative).
+ *   - For the special-case `actions` tab we delegate to `formatActionsList`
+ *     so the output matches `boond_actions_search` (HTML stripped,
+ *     typeLabel, mainManager + dependsOn resolved via `included[]`).
+ */
+export function buildTabHandler(
+  apiPath: string,
+  entityName: string,
+  tabName: string
+): (params: IdInput) => Promise<{ content: { type: "text"; text: string }[] }> {
+  return async (params: IdInput) => {
+    const response = await fetchTabResponse(`${apiPath}/${params.id}/${tabName}`);
+    const text = tabName === "actions" ? await formatActionsList(response) : formatTabAuto(response, entityName);
+    return { content: [{ type: "text" as const, text }] };
+  };
 }
 
 interface SearchToolOverrides {

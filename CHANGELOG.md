@@ -3,6 +3,33 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.10.3] - 2026-06-03
+
+Généralisation du fix v1.10.1 (`Bug 1 : pagination des onglets`) aux 5 autres modules à onglets. En v1.10.1 le correctif n'avait été appliqué qu'à `candidates.ts` (et au `_get` mergé via `registerGetToolMerged`) ; les onglets dédiés des autres entités utilisaient encore le pattern bugué `apiRequest + formatDetailResponse(data[0])`. Reproduit en prod sur la ressource Damien BLAISE (#20, consultant depuis 6+ ans) :
+
+| Outil | Avant (1.10.2) | Après (1.10.3) |
+|---|---|---|
+| `boond_resources_projects` | 1 projet (≪ CSE - Formation ≫ seul) | Toutes les missions du consultant |
+| `boond_resources_positionings` | 1 positionnement | Tous les positionnements |
+| `boond_resources_times_reports` | 1 CRA (mai 2026) | Tous les CRA mensuels |
+| `boond_contacts_*` (tabs collection) | 1 ligne | Liste complète |
+| `boond_opportunities_*` (tabs collection) | 1 ligne | Liste complète |
+| `boond_companies_*` (tabs collection) | 1 ligne | Liste complète |
+| `boond_projects_*` (tabs collection) | 1 ligne | Liste complète |
+
+### Corrigé
+
+- **Pagination transverse des tab tools** (`src/tools/crud-factory.ts`, `src/tools/{resources,contacts,opportunities,companies,projects,candidates}.ts`). Nouveau helper exporté **`buildTabHandler(apiPath, entityName, tabName)`** qui combine :
+  - `fetchTabResponse(path)` (déjà existant depuis v1.10.1) : demande `maxResults=500` et walks pages jusqu'à `meta.totals.rows`.
+  - `formatTabAuto(response, entityName)` (déjà existant) : auto-détection liste vs entité unique → `formatListResponse` (toutes les lignes) ou `formatDetailResponse` (single).
+  - Route spéciale sur `tabName === "actions"` → `formatActionsList` (HTML strippé, typeLabel, mainManager + dependsOn résolus depuis `included[]`).
+
+- **6 modules refactorés** pour utiliser le helper unifié dans leur boucle de tabs : `candidates.ts` (suppression du fix inline 1.10.1 au profit du helper transverse), `resources.ts`, `contacts.ts`, `opportunities.ts`, `companies.ts` (suppression de la condition `tab.name === "actions"` inline maintenant dans le helper), `projects.ts`. Net : -30 lignes dupliquées + comportement identique sur les 6 entités.
+
+### Tests
+
+- **+4 tests** dans `src/tools/crud-factory.test.ts` (suite `buildTabHandler`) : appel correct sur `${apiPath}/${id}/${tabName}`, rendu de TOUTES les lignes d'un onglet multi-rows (la dernière ligne #105 qui était dropped par `formatDetailResponse(data[0])` apparaît bien), routage automatique sur `formatActionsList` pour `tabName === "actions"`, fallback `formatDetailResponse` pour les onglets mono-entité (information). **539 tests passants** (vs 535 en 1.10.2).
+
 ## [1.10.2] - 2026-05-27
 
 Correction de `boond_actions_create` qui retournait systématiquement HTTP 422 — la création d'action ne fonctionnait pas du tout. Diagnostic effectué en inspectant la vraie structure d'une action existante via `GET /actions/216050` plutôt qu'en se fiant à la doc.

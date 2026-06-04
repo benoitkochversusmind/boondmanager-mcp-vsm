@@ -1,6 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ContactCreateSchema, ContactUpdateSchema, ContactSearchSchema, IdSchema } from "../schemas/index.js";
-import type { IdInput } from "../schemas/index.js";
 import {
   registerSearchTool,
   registerGetToolMerged,
@@ -8,8 +7,8 @@ import {
   registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
+  buildTabHandler,
 } from "./crud-factory.js";
-import { apiRequest, formatDetailResponse } from "../services/boond-client.js";
 
 const OPTS = {
   entityName: "contact",
@@ -144,7 +143,7 @@ export function registerContactTools(server: McpServer): void {
 
   registerDeleteTool(server, OPTS);
 
-  // Register one tool per contact tab
+  // Register one tool per contact tab (paginated + auto list/detail formatter — cf. 1.10.3).
   for (const tab of CONTACT_TABS) {
     server.registerTool(
       `boond_contacts_${tab.name}`,
@@ -154,13 +153,7 @@ export function registerContactTools(server: McpServer): void {
         inputSchema: IdSchema,
         annotations: TAB_TOOL_ANNOTATIONS,
       },
-      async (params: IdInput) => {
-        const response = await apiRequest(`/contacts/${params.id}/${tab.tab}`);
-        const text = formatDetailResponse(response);
-        return {
-          content: [{ type: "text" as const, text }],
-        };
-      }
+      buildTabHandler(OPTS.apiPath, OPTS.entityName, tab.tab)
     );
   }
 }

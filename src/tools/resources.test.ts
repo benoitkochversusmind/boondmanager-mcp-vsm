@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerResourceTools, fetchResourceMissionsHistory } from "./resources.js";
+import { registerResourceTools, fetchResourceMissionsHistory, resolveResourceIdentifier } from "./resources.js";
 import * as boondClient from "../services/boond-client.js";
 
 function createMockServer() {
@@ -177,5 +177,96 @@ describe("fetchResourceMissionsHistory", () => {
     await fetchResourceMissionsHistory({ resourceId: "20", maxEnrichments: 10, withProjectDates: false });
     const companyCalls = apiSpy.mock.calls.filter((c) => (c[0] as string).startsWith("/companies/"));
     expect(companyCalls).toHaveLength(10); // cap honoured
+  });
+});
+
+// ---- Name resolution (v1.11.1) --------------------------------------------
+
+describe("resolveResourceIdentifier", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function resourceStub(id: string, lastName: string, firstName: string) {
+    return { id, type: "resource", attributes: { firstName, lastName } };
+  }
+
+  it("returns the numeric ID as-is without any API call (fast path)", async () => {
+    const apiSpy = vi.spyOn(boondClient, "apiRequest");
+    const out = await resolveResourceIdentifier("20");
+    expect(out).toEqual({ id: "20", displayName: null });
+    expect(apiSpy).not.toHaveBeenCalled();
+  });
+
+  it("resolves a single name match via /resources?keywordsType=lastName", async () => {
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path.startsWith("/resources?")) {
+        return { data: [resourceStub("20", "BLAISE", "Damien")] } as never;
+      }
+      return { data: null } as never;
+    });
+    const out = await resolveResourceIdentifier("BLAISE");
+    expect(out.id).toBe("20");
+    expect(out.displayName).toBe("Damien BLAISE");
+    // The first call must target lastName lookup.
+    expect(apiSpy.mock.calls[0][0]).toContain("keywordsType=lastName");
+    expect(apiSpy.mock.calls[0][0]).toContain("keywords=BLAISE");
+  });
+
+  it("falls back to fullName when lastName lookup returns 0 and input is multi-token", async () => {
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path.includes("keywordsType=lastName")) return { data: [] } as never;
+      if (path.includes("keywordsType=fullName")) {
+        return { data: [resourceStub("20", "BLAISE", "Damien")] } as never;
+      }
+      return { data: null } as never;
+    });
+    const out = await resolveResourceIdentifier("Damien BLAISE");
+    expect(out.id).toBe("20");
+    expect(apiSpy).toHaveBeenCalledTimes(2);
+    expect(apiSpy.mock.calls[1][0]).toContain("keywordsType=fullName");
+  });
+
+  it("throws a clear error when no resource matches", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: [] } as never);
+    await expect(resolveResourceIdentifier("consultant_inexistant")).rejects.toThrow(
+      /Aucune ressource trouvée pour "consultant_inexistant"/
+    );
+  });
+
+  it("throws with the candidate list when multiple matches are returned", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
+      data: [
+        resourceStub("20", "BLAISE", "Damien"),
+        resourceStub("21", "BLAISE", "Sophie"),
+        resourceStub("22", "BLAISE", "Marc"),
+      ],
+    } as never);
+    await expect(resolveResourceIdentifier("BLAISE")).rejects.toThrow(
+      /3 ressources correspondent à "BLAISE".+#20.+Damien BLAISE.+#21.+Sophie BLAISE.+#22.+Marc BLAISE/s
+    );
+  });
+});
+
+// ---- fetchResourceMissionsHistory + name resolution (v1.11.1) -------------
+
+describe("fetchResourceMissionsHistory with name input", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("resolves a name to an ID before fetching projects and surfaces displayName", async () => {
+    vi.spyOn(boondClient, "fetchTabResponse").mockResolvedValue({ data: [] } as never);
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path) => {
+      if (path.startsWith("/resources?")) {
+        return {
+          data: [{ id: "20", type: "resource", attributes: { firstName: "Damien", lastName: "BLAISE" } }],
+        } as never;
+      }
+      return { data: null } as never;
+    });
+    const { resourceId, displayName } = await fetchResourceMissionsHistory({ resourceId: "BLAISE" });
+    expect(resourceId).toBe("20");
+    expect(displayName).toBe("Damien BLAISE");
   });
 });

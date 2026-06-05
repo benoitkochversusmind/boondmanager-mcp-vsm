@@ -218,6 +218,86 @@ function relId(r: JsonApiResource, key: string): string | null {
   return data && typeof data.id === "string" ? data.id : null;
 }
 
+// ---- Resource identifier resolution (v1.11.1) -----------------------------
+//
+// Accept either a numeric ID (`"20"`) or a name (`"Damien BLAISE"`, `"BLAISE"`).
+// Names are resolved via the `/resources` search endpoint :
+//   - 1 match  → use that ID, surface the displayName in the output header.
+//   - 0 match  → throw a clear error mentioning the input.
+//   - N match  → throw with the first 10 candidates (id + name) so the
+//                caller can disambiguate without firing another tool.
+//
+// Search strategy : at most 2 calls (cheap).
+//   1. Tokens of the input that are ALL-CAPS are treated as the last name
+//      (Versusmind convention). Search via `keywordsType=lastName` first —
+//      it's the most discriminating field on /resources.
+//   2. If 0 results and the input has multiple tokens, retry with the same
+//      keywords but `keywordsType=fullName` (matches "lastname firstname"
+//      ordering loosely).
+// Exported for unit tests.
+
+export interface ResolvedResource {
+  id: string;
+  displayName: string | null;
+}
+
+function buildDisplayName(r: JsonApiResource): string | null {
+  const a = attrs(r);
+  const first = typeof a["firstName"] === "string" ? (a["firstName"] as string) : "";
+  const last = typeof a["lastName"] === "string" ? (a["lastName"] as string) : "";
+  const composed = [first, last].filter(Boolean).join(" ").trim();
+  if (composed) return composed;
+  return typeof a["title"] === "string" ? (a["title"] as string) : null;
+}
+
+async function searchResourcesByKeywords(
+  keywords: string,
+  keywordsType: "lastName" | "firstName" | "fullName"
+): Promise<JsonApiResource[]> {
+  const qs = new URLSearchParams({
+    keywords,
+    keywordsType,
+    maxResults: "20",
+  });
+  const r: JsonApiResponse = await apiRequest(`/resources?${qs.toString()}`);
+  return Array.isArray(r.data) ? r.data : r.data ? [r.data] : [];
+}
+
+export async function resolveResourceIdentifier(input: string): Promise<ResolvedResource> {
+  const trimmed = input.trim();
+  // Fast path : numeric ID, no extra call.
+  if (/^\d+$/.test(trimmed)) {
+    return { id: trimmed, displayName: null };
+  }
+
+  // First attempt : lastName lookup. Most discriminating, single field.
+  let matches = await searchResourcesByKeywords(trimmed, "lastName");
+
+  // Fallback : fullName for multi-token inputs that lastName missed.
+  if (matches.length === 0 && /\s/.test(trimmed)) {
+    matches = await searchResourcesByKeywords(trimmed, "fullName");
+  }
+
+  if (matches.length === 0) {
+    throw new Error(
+      `Aucune ressource trouvée pour "${trimmed}". Vérifiez l'orthographe ou utilisez \`boond_resources_search\` pour explorer.`
+    );
+  }
+  if (matches.length === 1) {
+    const r = matches[0];
+    return { id: r.id, displayName: buildDisplayName(r) };
+  }
+  // Ambiguous : surface the first 10 candidates with id + name.
+  const sample = matches.slice(0, 10).map((r) => {
+    const name = buildDisplayName(r) ?? "(sans nom)";
+    return `  - #${r.id} : ${name}`;
+  });
+  const more = matches.length > 10 ? `\n  - … et ${matches.length - 10} autre(s).` : "";
+  throw new Error(
+    `${matches.length} ressources correspondent à "${trimmed}". Précisez l'ID ou le nom complet :\n${sample.join("\n")}${more}`
+  );
+}
+
 async function batchedLookup<T>(
   ids: string[],
   cap: number,
@@ -241,10 +321,13 @@ async function batchedLookup<T>(
 
 export async function fetchResourceMissionsHistory(params: ResourceMissionsHistoryInput): Promise<{
   resourceId: string;
+  displayName: string | null;
   rows: MissionRow[];
   unresolvedAfterCap: number;
 }> {
-  const resourceId = params.resourceId;
+  // 0. Accept either a numeric ID or a name. Name → resolve via /resources search.
+  const resolved = await resolveResourceIdentifier(params.resourceId);
+  const resourceId = resolved.id;
   const cap = params.maxEnrichments ?? 100;
   const withDates = params.withProjectDates ?? true;
 
@@ -303,17 +386,19 @@ export async function fetchResourceMissionsHistory(params: ResourceMissionsHisto
 
   const unresolvedAfterCap = Math.max(0, new Set(companyIds).size - cap) + Math.max(0, rawProjects.length - cap);
 
-  return { resourceId, rows, unresolvedAfterCap };
+  return { resourceId, displayName: resolved.displayName, rows, unresolvedAfterCap };
 }
 
 function formatMissionsHistoryOutput(
   resourceId: string,
+  displayName: string | null,
   rows: MissionRow[],
   groupByCompany: boolean,
   unresolvedAfterCap: number
 ): string {
+  const who = displayName ? `${displayName} (ressource #${resourceId})` : `ressource #${resourceId}`;
   if (rows.length === 0) {
-    return `Aucune mission trouvée pour la ressource #${resourceId}.`;
+    return `Aucune mission trouvée pour ${who}.`;
   }
 
   const uniqueClients = new Set(rows.map((r) => r.companyId ?? `?${r.projectId}`));
@@ -328,7 +413,7 @@ function formatMissionsHistoryOutput(
   const periodHint = oldest && newest ? ` · période ${oldest} → ${newest}` : "";
 
   const header = [
-    `📋 Historique des missions — ressource #${resourceId}`,
+    `📋 Historique des missions — ${who}`,
     `Total : ${rows.length} mission(s) sur ${uniqueClients.size} société(s) cliente(s)${periodHint}`,
   ].join("\n");
 
@@ -383,7 +468,7 @@ Pipeline orchestré côté serveur (1 seul appel pour l'agent au lieu de N) :
 4. Tri par date de mission décroissante + groupement par client (par défaut).
 
 Paramètres :
-- \`resourceId\` (string, requis) : ID numérique de la ressource (utiliser \`boond_resources_search\` pour le résoudre par nom).
+- \`resourceId\` (string, requis) : **ID numérique** (\`"20"\`) **ou nom** (\`"Damien BLAISE"\`, \`"BLAISE"\`). Si nom, résolution serveur via \`/resources?keywords=…\` ; 0 match → erreur, plusieurs matches → erreur avec la liste des candidats.
 - \`withProjectDates\` (boolean, défaut true) : enrichit chaque projet avec sa date de début. Mettre \`false\` pour gagner ~N appels si seul le nom client compte.
 - \`groupByCompany\` (boolean, défaut true) : sortie regroupée par société (top clients en premier) ou liste plate triée par récence.
 - \`maxEnrichments\` (1-200, défaut 100) : cap sur les GET parallèles. Au-delà, les enrichissements excédentaires sont sautés et signalés.
@@ -441,11 +526,23 @@ export function registerResourceTools(server: McpServer): void {
       },
     },
     async (params) => {
-      const { resourceId, rows, unresolvedAfterCap } = await fetchResourceMissionsHistory(
-        params as ResourceMissionsHistoryInput
-      );
-      const text = formatMissionsHistoryOutput(resourceId, rows, params.groupByCompany ?? true, unresolvedAfterCap);
-      return { content: [{ type: "text" as const, text }] };
+      try {
+        const { resourceId, displayName, rows, unresolvedAfterCap } = await fetchResourceMissionsHistory(
+          params as ResourceMissionsHistoryInput
+        );
+        const text = formatMissionsHistoryOutput(
+          resourceId,
+          displayName,
+          rows,
+          params.groupByCompany ?? true,
+          unresolvedAfterCap
+        );
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        // Resolution errors (0 match, ambiguous) come back as readable messages.
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: message }], isError: true };
+      }
     }
   );
 }

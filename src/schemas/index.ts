@@ -778,7 +778,10 @@ export const ResourceMissionsHistorySchema = z
     resourceId: z
       .string()
       .min(1)
-      .describe("ID numérique de la ressource (consultant) dont on veut l'historique de missions."),
+      .describe(
+        'Identifiant de la ressource (consultant) : ID numérique (ex: `"20"`) ou nom (ex: `"Damien BLAISE"`, `"BLAISE"`). ' +
+          "Si nom : le serveur résout automatiquement via `/resources?keywords=…` ; erreur claire si 0 ou plusieurs correspondances (avec la liste des candidats pour désambiguïser)."
+      ),
     withProjectDates: z
       .boolean()
       .optional()

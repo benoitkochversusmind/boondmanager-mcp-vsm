@@ -3,6 +3,37 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.11.1] - 2026-06-04
+
+Le tool `boond_resources_missions_history` accepte désormais **un nom** (`"Damien BLAISE"`, `"BLAISE"`) en plus d'un ID numérique. Avant : seul un ID entier passait, sinon 404 sur `/resources/{name}/projects`. Après : le serveur résout le nom via `/resources?keywords=…` puis enchaîne avec la chaîne déjà en place v1.11.0.
+
+### Ajouté
+
+- **Helper exporté `resolveResourceIdentifier(input)`** (`src/tools/resources.ts`) :
+  - Fast path : si l'input matche `/^\d+$/`, retour immédiat (zéro appel API).
+  - Sinon : `GET /resources?keywords=<input>&keywordsType=lastName` (champ le plus discriminant).
+  - Fallback si 0 résultat et input multi-token : retry avec `keywordsType=fullName`.
+  - Coût : 1 appel API supplémentaire (2 dans le pire cas) — négligeable devant les N enrichissements companies/projets.
+- **Gestion explicite des cas d'erreur** :
+  - 0 match → `Error("Aucune ressource trouvée pour \"<input>\". Vérifiez l'orthographe ou utilisez \`boond_resources_search\` pour explorer.")`.
+  - N matches → `Error("<N> ressources correspondent à \"<input>\". Précisez l'ID ou le nom complet :")` suivi des 10 premiers candidats (id + nom). Évite un round-trip de désambiguïsation côté agent.
+  - Le handler du tool capture ces erreurs et les renvoie en `isError: true` avec un message lisible (plutôt qu'une stack trace).
+- **`displayName` dans la sortie** : l'en-tête du rendu affiche désormais `📋 Historique des missions — Damien BLAISE (ressource #20)` au lieu de `ressource #20` seul (résolu via `attributes.firstName + lastName`, fallback `title`). Si l'input est un ID numérique, le nom n'est pas résolu (pas d'appel supplémentaire) et l'en-tête reste sur `ressource #<id>`.
+- **Schéma `ResourceMissionsHistorySchema.resourceId`** mis à jour pour documenter les deux formats acceptés.
+
+### Tests
+
+- **+6 tests** dans `src/tools/resources.test.ts` :
+  - Suite `resolveResourceIdentifier` (5 tests) : fast path numérique (zéro appel), 1 match via lastName, fallback fullName multi-token, 0 match → erreur claire, N matches → erreur avec liste.
+  - Suite `fetchResourceMissionsHistory with name input` (1 test) : la résolution se cascade correctement et `displayName` remonte dans le retour.
+- **551 tests passants** (vs 545 en 1.11.0).
+
+### Cas d'usage débloqué
+
+Avant : *« Donne-moi les missions de Damien BLAISE »* → l'agent devait d'abord appeler `boond_resources_search(keywords="BLAISE")` pour récupérer l'ID, puis `boond_resources_missions_history(resourceId="20")` — 2 outils, 2 appels.
+
+Après : *« Donne-moi les missions de Damien BLAISE »* → un seul appel `boond_resources_missions_history(resourceId="Damien BLAISE")` qui résout en interne. Plus de friction pour les utilisateurs qui ne connaissent pas les IDs Boond par cœur.
+
 ## [1.11.0] - 2026-06-04
 
 Nouvel outil composite **`boond_resources_missions_history`** — historique complet des missions d'un consultant en un seul appel, avec résolution automatique du nom des sociétés clientes et de la date de début de chaque mission. Répond au cas d'usage « toutes les missions et tous les clients sur lesquels un consultant a travaillé ».

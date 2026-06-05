@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Documenté / Corrigé
+
+- **`boond_actions_search` — filtres par entité non appliqués** : les paramètres `contactId` / `candidateId` / `companyId` / `resourceId` ne sont **pas pris en compte** par l'API `/actions` (vérifié en prod v9.1.58.0 : `contactId=796` → ~153 000 actions au lieu de 4 — résultats à l'échelle de toute l'org). La description du tool avertit désormais d'utiliser les onglets scopés (`boond_contacts_actions`, `boond_candidates_actions`, `boond_companies_actions`, `boond_resources_actions`).
+- **Sémantique `period` corrigée** : `started`→`startDate`, `created`→`creationDate`, `updated`→`updateDate`. L'ancienne note (« `created` cible `started` ») était inexacte sur cette version de l'API.
+- **`/contacts/{id}/actions` n'expose pas `updateDate`** (seulement `startDate`/`creationDate`) — à connaître pour une capture incrémentale par date de modification.
+
+> Findings issus de l'intégration du datastore de prospection (projet P20260604), 2026-06-04.
+
 ## [1.11.1] - 2026-06-04
 
 Le tool `boond_resources_missions_history` accepte désormais **un nom** (`"Damien BLAISE"`, `"BLAISE"`) en plus d'un ID numérique. Avant : seul un ID entier passait, sinon 404 sur `/resources/{name}/projects`. Après : le serveur résout le nom via `/resources?keywords=…` puis enchaîne avec la chaîne déjà en place v1.11.0.

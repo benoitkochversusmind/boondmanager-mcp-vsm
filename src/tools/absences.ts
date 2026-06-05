@@ -27,7 +27,16 @@ import type { JsonApiResource, JsonApiResponse } from "../types.js";
 //   - Live API probing on the production tenant (ca-boondmcp-vsm) on
 //     2026-06-05 (BoondManager API version v9.1.58.0). The official RAML
 //     at https://doc.boondmanager.com/api-externe/raml-build/ is
-//     auth-gated and could not be fetched directly.
+//     auth-gated and could not be fetched directly. The API itself
+//     surfaced the canonical filter parameter names through its own
+//     422 error message :
+//       `GET /absences-reports` → "1017 - Missing required attribute
+//       (parameter: endMonth) | 1017 - Missing required attribute
+//       (parameter: startMonth)"
+//     → the collection requires `startMonth` + `endMonth` (YYYY-MM),
+//     not `startDate`/`endDate`. This explains why the original tool
+//     fell back to `/absences` : the canonical endpoint refuses to be
+//     called without those bounds.
 //   - `/absences-reports/{id}` returns an entity of type `absencesreport`
 //     with `attributes.absencesPeriods[] = [{startDate, endDate, duration,
 //     title, workUnitType: {reference, name, activityType}}]` and
@@ -38,12 +47,17 @@ import type { JsonApiResource, JsonApiResponse } from "../types.js";
 // Strategy :
 //   - Endpoint switched to `/absences-reports` (matches `get`, no more
 //     orphan IDs).
-//   - `include=resource` requested so the agency's first/last name lands
+//   - Caller-friendly daily window (`startDate`/`endDate`, YYYY-MM-DD) is
+//     derived into the monthly window the API requires (`startMonth` /
+//     `endMonth`, YYYY-MM). If the caller omits both bounds the tool
+//     defaults to a "broad" window (1 year back through 1 year forward
+//     from today) since the API mandates non-empty bounds.
+//   - `include=resource` requested so the resource's first/last name lands
 //     in `included[]` — single round-trip, no N+1.
-//   - `startDate`/`endDate` are forwarded to the API as best-effort
-//     server-side filters; behaviour with the complex `absencesPeriods[]`
-//     sub-entity is not reliably documented, so we always re-filter
-//     client-side on overlap to guarantee correctness.
+//   - Daily-grain filtering happens client-side on every
+//     `absencesPeriods[]` entry (overlap with the daily window). The
+//     server-side monthly filter is necessarily coarser ; we trust the
+//     finer client-side filter as the source of truth.
 //   - Output flattens by `absencesPeriods[]` (one line per period) and
 //     includes : last name, first name, period start, period end,
 //     duration, `workUnitType.name`, report state.
@@ -123,6 +137,32 @@ function buildResourceIndex(
  * resource names. Server-side filter is best-effort ; the authoritative
  * filtering happens client-side on each `absencesPeriods[]` entry.
  */
+/**
+ * Convert YYYY-MM-DD → YYYY-MM. Returns null for malformed input.
+ */
+export function toMonth(date: string | undefined): string | null {
+  if (!date) return null;
+  const m = /^(\d{4}-\d{2})-\d{2}$/.exec(date);
+  return m ? m[1] : null;
+}
+
+/**
+ * Default monthly window when the caller gives no date hints : 1 year back
+ * through 1 year forward from `today`. Built deterministically so tests
+ * can stub `today`.
+ */
+export function defaultMonthlyWindow(today: Date): { startMonth: string; endMonth: string } {
+  const start = new Date(today);
+  start.setUTCFullYear(start.getUTCFullYear() - 1);
+  const end = new Date(today);
+  end.setUTCFullYear(end.getUTCFullYear() + 1);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return {
+    startMonth: `${start.getUTCFullYear()}-${pad(start.getUTCMonth() + 1)}`,
+    endMonth: `${end.getUTCFullYear()}-${pad(end.getUTCMonth() + 1)}`,
+  };
+}
+
 export async function searchAbsencesEnriched(params: AbsenceSearchInput): Promise<{
   rows: EnrichedAbsenceRow[];
   totalReportsFetched: number;
@@ -133,9 +173,21 @@ export async function searchAbsencesEnriched(params: AbsenceSearchInput): Promis
   const baseQuery: Record<string, unknown> = buildSearchQuery(rest);
   // Hydrate resource via JSON:API include — avoids N+1.
   baseQuery["include"] = "resource";
-  // Best-effort server-side filter ; documented as potentially ignored.
-  if (startDate) baseQuery["startDate"] = startDate;
-  if (endDate) baseQuery["endDate"] = endDate;
+  // `/absences-reports` requires `startMonth`+`endMonth` (YYYY-MM). The
+  // API surfaces these as REQUIRED via a 422 "1017 - Missing required
+  // attribute" if either is omitted. We derive them from the daily window
+  // the caller passes ; if both bounds are absent we fall back to a wide
+  // default (today ±1 year) because the API will not accept a call without
+  // them.
+  const startMonth = toMonth(startDate);
+  const endMonth = toMonth(endDate);
+  if (startMonth) baseQuery["startMonth"] = startMonth;
+  if (endMonth) baseQuery["endMonth"] = endMonth;
+  if (!startMonth || !endMonth) {
+    const fallback = defaultMonthlyWindow(new Date());
+    if (!startMonth) baseQuery["startMonth"] = fallback.startMonth;
+    if (!endMonth) baseQuery["endMonth"] = fallback.endMonth;
+  }
   // Linked-resource filter (passed as keyword prefix following the same
   // pattern as `boond_actions_search` — the literal `resourceId=` is
   // silently ignored on most collection endpoints).
@@ -159,7 +211,7 @@ export async function searchAbsencesEnriched(params: AbsenceSearchInput): Promis
   // auto-paginate up to `cap` when a date window is given (since the
   // server filter may not narrow at all and the caller wants every
   // overlapping period).
-   
+
   while (true) {
     const pageQuery: Record<string, unknown> = { ...baseQuery, page: currentPage };
     if (wantsAll) {

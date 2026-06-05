@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerAbsenceTools, searchAbsencesEnriched, periodOverlapsWindow } from "./absences.js";
+import {
+  registerAbsenceTools,
+  searchAbsencesEnriched,
+  periodOverlapsWindow,
+  toMonth,
+  defaultMonthlyWindow,
+} from "./absences.js";
 import * as boondClient from "../services/boond-client.js";
 
 function createMockServer() {
@@ -331,7 +337,7 @@ describe("searchAbsencesEnriched", () => {
     expect(q["keywords"]).toBe("COMP20 RTT");
   });
 
-  it("forwards startDate/endDate to the API as best-effort hints (server-side may ignore)", async () => {
+  it("derives startMonth/endMonth (YYYY-MM) from startDate/endDate for the API (required params per /absences-reports 422)", async () => {
     const spy = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
       data: [],
       meta: { totals: { rows: 0 } },
@@ -343,7 +349,51 @@ describe("searchAbsencesEnriched", () => {
       endDate: "2026-05-20",
     });
     const q = spy.mock.calls[0][3] as Record<string, unknown>;
-    expect(q["startDate"]).toBe("2026-04-21");
-    expect(q["endDate"]).toBe("2026-05-20");
+    expect(q["startMonth"]).toBe("2026-04");
+    expect(q["endMonth"]).toBe("2026-05");
+    // The daily params are NOT forwarded — only their month projection.
+    expect(q["startDate"]).toBeUndefined();
+    expect(q["endDate"]).toBeUndefined();
+  });
+
+  it("falls back to a default monthly window (today ±1y) when neither bound is given (the API rejects calls without them)", async () => {
+    const spy = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
+      data: [],
+      meta: { totals: { rows: 0 } },
+    } as never);
+    await searchAbsencesEnriched({ page: 1, pageSize: 30 });
+    const q = spy.mock.calls[0][3] as Record<string, unknown>;
+    expect(typeof q["startMonth"]).toBe("string");
+    expect(typeof q["endMonth"]).toBe("string");
+    expect(q["startMonth"] as string).toMatch(/^\d{4}-\d{2}$/);
+    expect(q["endMonth"] as string).toMatch(/^\d{4}-\d{2}$/);
+  });
+});
+
+// ---- Date helpers (v1.11.2) -----------------------------------------------
+
+describe("toMonth", () => {
+  it("extracts YYYY-MM from a YYYY-MM-DD string", () => {
+    expect(toMonth("2026-04-21")).toBe("2026-04");
+  });
+  it("returns null for undefined input", () => {
+    expect(toMonth(undefined)).toBeNull();
+  });
+  it("returns null for malformed input", () => {
+    expect(toMonth("2026/04/21")).toBeNull();
+    expect(toMonth("abc")).toBeNull();
+  });
+});
+
+describe("defaultMonthlyWindow", () => {
+  it("returns a 24-month window centred on the given date", () => {
+    const w = defaultMonthlyWindow(new Date("2026-06-15T12:00:00Z"));
+    expect(w.startMonth).toBe("2025-06");
+    expect(w.endMonth).toBe("2027-06");
+  });
+  it("pads month digits with a leading zero", () => {
+    const w = defaultMonthlyWindow(new Date("2026-01-05T00:00:00Z"));
+    expect(w.startMonth).toBe("2025-01");
+    expect(w.endMonth).toBe("2027-01");
   });
 });

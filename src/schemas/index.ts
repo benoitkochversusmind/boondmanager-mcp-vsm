@@ -1068,13 +1068,45 @@ export const AbsenceUpdateSchema = z
 export const AbsenceSearchSchema = z
   .object({
     keywords: z.string().optional().describe("Mots-clés de recherche"),
-    resourceId: z.string().optional().describe("Filtrer par ID ressource"),
-    startDate: z.string().optional().describe("Date de début de période (YYYY-MM-DD)"),
-    endDate: z.string().optional().describe("Date de fin de période (YYYY-MM-DD)"),
+    resourceId: z
+      .string()
+      .optional()
+      .describe(
+        "Filtrer par ID ressource. Injecté en préfixe `COMP<id>` dans `keywords` (l'API `/absences-reports` ignore `resourceId=` littéral, même pattern que `/actions`)."
+      ),
+    startDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe(
+        "Borne basse de la fenêtre (YYYY-MM-DD). Filtre côté serveur MCP sur `absencesPeriods[].endDate >= startDate` (overlap)."
+      ),
+    endDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe(
+        "Borne haute de la fenêtre (YYYY-MM-DD). Filtre côté serveur MCP sur `absencesPeriods[].startDate <= endDate` (overlap)."
+      ),
+    fetchAll: z
+      .boolean()
+      .optional()
+      .describe(
+        "Auto-pagination jusqu'à `maxScannedReports`. Activé par défaut quand `startDate` ou `endDate` est fourni (le filtre est appliqué après fetch, donc une page seule risque de cacher tous les résultats pertinents)."
+      ),
+    maxScannedReports: z
+      .number()
+      .int()
+      .min(1)
+      .max(5000)
+      .optional()
+      .describe("Cap d'absences-reports scannés en auto-pagination (défaut 1000, max 5000)."),
     page: z.number().int().min(1).max(MAX_SEARCH_PAGE).default(1).describe(`Numéro de page (max: ${MAX_SEARCH_PAGE})`),
     pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).describe("Résultats par page"),
   })
   .strict();
+
+export type AbsenceSearchInput = z.infer<typeof AbsenceSearchSchema>;
 
 // ---- Expense schemas (Notes de frais) ----
 

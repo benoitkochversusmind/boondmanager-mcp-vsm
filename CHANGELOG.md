@@ -3,7 +3,40 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.11.2] - 2026-06-05
+
+Trois bugs corrigés sur `boond_absences_search`, signalés par l'intégration du datastore de prospection (cas d'usage : extraire les périodes d'absence sur une fenêtre glissante). Endpoint canonique, filtrage côté serveur MCP sur les périodes, et sortie enrichie nom/prénom/dates/type en un seul appel (plus de N+1).
+
+### Corrigé
+
+- **Bug 1 — filtre période ignoré** (`src/tools/absences.ts`). L'ancienne version appelait `/absences` avec `startDate`/`endDate` forwardés littéralement ; l'endpoint ignorait ces paramètres et renvoyait toute l'org (17 110 absences, validé en prod). Cette version applique le filtrage **côté serveur MCP** sur `attributes.absencesPeriods[].startDate/endDate` (overlap avec la fenêtre demandée) : une absence est retenue si AU MOINS une de ses périodes chevauche la fenêtre. Les bornes restent forwardées à l'API en best-effort (utile si BoondManager les exploite côté serveur sur certaines instances) mais la vérité reste le filtre client-side.
+
+- **Bug 2 — sortie pauvre (juste l'ID et un titre optionnel)** (`src/tools/absences.ts`). La query envoie maintenant `include=resource` (JSON:API), ce qui hydrate `included[]` avec les ressources liées en un seul aller-retour. La sortie est ré-écrite : **une ligne par période** (chaque absences-report peut en contenir plusieurs), structurée `[absencesreport #id] LASTNAME Firstname | YYYY-MM-DD → YYYY-MM-DD (Xj) | Type · titre · état`. Plus de N+1 pour récupérer les noms.
+
+- **Bug 3 — `boond_absences_get` 404 sur certains IDs récents** (#19336, #18913 signalés). Diagnostic : l'ancien `boond_absences_search` interrogeait `/absences` (collection legacy/hétérogène) alors que `get` utilise `/absences-reports/{id}` ; les deux endpoints renvoient des entités de types différents, certains IDs de `/absences` ne sont **pas** résolvables comme `/absences-reports/{id}`. Le fix réaligne search sur `/absences-reports` — désormais search et get parlent de la même entité (`type: "absencesreport"`), par construction tout ID listé est résolvable. La description de `boond_absences_get` documente que les anciens IDs externes peuvent provenir d'une autre entité.
+
+### Ajouté
+
+- **`fetchAll: boolean` + `maxScannedReports: 1-5000` (défaut 1000)** sur `AbsenceSearchSchema`. Auto-pagination forcée à `true` par défaut quand une fenêtre temporelle est fournie (sinon le filtre côté serveur MCP risque de jeter toute la première page et laisser le caller croire « aucun résultat »). Garde-fou anti-runaway via le cap.
+- **`resourceId` route vers le préfixe `COMP<id>` dans `keywords`** (pattern identique à `boond_actions_search` v1.10.0, voir CHANGELOG v1.11.2 et la PR #1 mergée précédemment). L'API `/absences-reports` ignore le `resourceId=` littéral ; passer par le keyword prefix scope correctement.
+- **`AbsenceSearchInput` exporté** + helpers `searchAbsencesEnriched`, `periodOverlapsWindow` exportés pour les tests et la réutilisation.
+
+### Tests
+
+- **+19 tests** dans `src/tools/absences.test.ts` (23 au total, vs 4 en 1.11.1) :
+  - Suite `periodOverlapsWindow` (8 tests) : aucune borne, période avant/après/touchant les bornes, période nestée, période enveloppant la fenêtre, fenêtre demi-ouverte.
+  - Suite `searchAbsencesEnriched` (11 tests) : appel sur `/absences-reports?include=resource`, filtrage par overlap (Bug 1), enrichissement nom/prénom via `included[]` (Bug 2), flatten multi-périodes par report, résultat vide sans faux positif, auto-pagination déclenchée par une fenêtre, cap `maxScannedReports` honoré, **pas** d'auto-pagination sans fenêtre (rétro-compat), `COMP<id>` injecté dans `keywords` (avec ou sans `keywords` caller-side), `startDate`/`endDate` forwardés à l'API en best-effort.
+- **570 tests passants** (vs 551 en 1.11.1).
+
+### Note sur la source — vérification de l'API
+
+La doc RAML officielle (`https://doc.boondmanager.com/api-externe/raml-build/`) renvoie HTTP 403 sans authentification ; la vérification a été faite empiriquement par appels à l'API live (tenant `ca-boondmcp-vsm`, BoondManager v9.1.58.0, 2026-06-05) :
+- `GET /absences-reports/11855` confirme `type: "absencesreport"`, `attributes.absencesPeriods[] = [{startDate, endDate, duration, title, workUnitType: {name, reference, activityType}}]`, `relationships.resource.data.id`.
+- `GET /resources/{id}/absences-reports` retourne le même shape (test sur resource #20 → 122 rows, type `absencesreport`).
+- `GET /absences?startDate=...&endDate=...` retourne le même nombre de rows que sans filtres (17 110) → filtre ignoré par l'API.
+- `GET /absences-reports/19336` → 404 (entité inexistante côté endpoint canonique → confirme que `/absences` listait des IDs externes au schéma).
+
+### Documenté / Corrigé (PR #1, mergée précédemment)
 
 ### Documenté / Corrigé
 

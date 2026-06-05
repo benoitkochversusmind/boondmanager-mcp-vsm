@@ -7,11 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documenté / Corrigé
 
-- **`boond_actions_search` — filtres par entité non appliqués** : les paramètres `contactId` / `candidateId` / `companyId` / `resourceId` ne sont **pas pris en compte** par l'API `/actions` (vérifié en prod v9.1.58.0 : `contactId=796` → ~153 000 actions au lieu de 4 — résultats à l'échelle de toute l'org). La description du tool avertit désormais d'utiliser les onglets scopés (`boond_contacts_actions`, `boond_candidates_actions`, `boond_companies_actions`, `boond_resources_actions`).
+- **`boond_actions_search` — clarification du routing des filtres entité** : l'API BoondManager `/actions` ignore silencieusement les noms de paramètres littéraux `contactId=` / `candidateId=` / `companyId=` / `resourceId=` (vérifié en prod v9.1.58.0 : un raw `GET /actions?contactId=796` renvoie 153 090 actions, soit la totalité de l'org). **Notre tool MCP contourne déjà ce comportement depuis la v1.10.0** en injectant ces IDs dans `keywords` via les préfixes BoondManager `CCON<id>` / `CAND<id>` / `CSOC<id>` / `COMP<id>` (cf. `src/tools/actions.ts` lignes 607-612). Validé en prod : `boond_actions_search({contactId: "796"})` → 4 actions correctement scopées. La description du tool documente désormais explicitement cette transformation et signale les onglets scopés (`boond_contacts_actions`, `boond_candidates_actions`, `boond_companies_actions`, `boond_resources_actions`) comme alternative équivalente quand on veut juste « les actions d'une entité X ».
 - **Sémantique `period` corrigée** : `started`→`startDate`, `created`→`creationDate`, `updated`→`updateDate`. L'ancienne note (« `created` cible `started` ») était inexacte sur cette version de l'API.
-- **`/contacts/{id}/actions` n'expose pas `updateDate`** (seulement `startDate`/`creationDate`) — à connaître pour une capture incrémentale par date de modification.
+- **`/contacts/{id}/actions` n'expose pas `updateDate`** (seulement `startDate`/`creationDate`) — à connaître pour une capture incrémentale par date de modification (passer par `boond_actions_search` qui, lui, surface `updateDate`).
 
-> Findings issus de l'intégration du datastore de prospection (projet P20260604), 2026-06-04.
+> Findings remontés par l'agent BoondProsp (projet P20260604) en intégrant le datastore de prospection, 2026-06-04. Vérifiés et reformulés côté MCP pour distinguer le comportement de l'API brute (cassé) de celui de notre tool MCP (correct grâce à la transformation v1.10.0).
 
 ## [1.11.1] - 2026-06-04
 

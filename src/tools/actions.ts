@@ -554,7 +554,7 @@ export function registerActionTools(server: McpServer): void {
 
 Args:
   - keywords (string, optional): Termes de recherche
-  - candidateId, resourceId, contactId, companyId (string, optional): ⚠️ NON APPLIQUÉS par l'API \`/actions\` (filtres silencieusement ignorés → résultats à l'échelle de TOUTE l'org, non scopés). Vérifié en prod (v9.1.58.0) : \`contactId=796\` renvoie ~153 000 actions au lieu de 4. Pour les actions d'une entité précise, utiliser l'onglet dédié : \`boond_contacts_actions\` / \`boond_candidates_actions\` / \`boond_companies_actions\` / \`boond_resources_actions\`.
+  - candidateId, resourceId, contactId, companyId (string, optional): Filtrer par entité liée. ℹ️ L'API \`/actions\` ignore les noms littéraux ; le tool MCP les transforme en préfixes \`keywords\` (\`CCON<id>\` / \`CAND<id>\` / \`CSOC<id>\` / \`COMP<id>\`) — validé en prod (\`contactId: "796"\` → 4 actions scopées vs 153 000 sur l'API brute). Alternative équivalente : \`boond_contacts_actions\` / \`boond_candidates_actions\` / \`boond_companies_actions\` / \`boond_resources_actions\`.
   - managerId (string, optional): Filtrer par auteur (créateur de l'action). Mappé sur \`perimeterManagers[]\` côté API.
   - dateFrom, dateTo (YYYY-MM-DD, optional): Bornes de période. Mappés sur \`startDate\` / \`endDate\` côté API.
   - period ('started' | 'created' | 'updated', défaut 'started'): Champ date filtré par dateFrom/dateTo

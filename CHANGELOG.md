@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Documenté / Corrigé
+
+- **`boond_actions_search` — clarification du routing des filtres entité** : l'API BoondManager `/actions` ignore silencieusement les noms de paramètres littéraux `contactId=` / `candidateId=` / `companyId=` / `resourceId=` (vérifié en prod v9.1.58.0 : un raw `GET /actions?contactId=796` renvoie 153 090 actions, soit la totalité de l'org). **Notre tool MCP contourne déjà ce comportement depuis la v1.10.0** en injectant ces IDs dans `keywords` via les préfixes BoondManager `CCON<id>` / `CAND<id>` / `CSOC<id>` / `COMP<id>` (cf. `src/tools/actions.ts` lignes 607-612). Validé en prod : `boond_actions_search({contactId: "796"})` → 4 actions correctement scopées. La description du tool documente désormais explicitement cette transformation et signale les onglets scopés (`boond_contacts_actions`, `boond_candidates_actions`, `boond_companies_actions`, `boond_resources_actions`) comme alternative équivalente quand on veut juste « les actions d'une entité X ».
+- **Sémantique `period` corrigée** : `started`→`startDate`, `created`→`creationDate`, `updated`→`updateDate`. L'ancienne note (« `created` cible `started` ») était inexacte sur cette version de l'API.
+- **`/contacts/{id}/actions` n'expose pas `updateDate`** (seulement `startDate`/`creationDate`) — à connaître pour une capture incrémentale par date de modification (passer par `boond_actions_search` qui, lui, surface `updateDate`).
+
+> Findings remontés par l'agent BoondProsp (projet P20260604) en intégrant le datastore de prospection, 2026-06-04. Vérifiés et reformulés côté MCP pour distinguer le comportement de l'API brute (cassé) de celui de notre tool MCP (correct grâce à la transformation v1.10.0).
+
 ## [1.11.1] - 2026-06-04
 
 Le tool `boond_resources_missions_history` accepte désormais **un nom** (`"Damien BLAISE"`, `"BLAISE"`) en plus d'un ID numérique. Avant : seul un ID entier passait, sinon 404 sur `/resources/{name}/projects`. Après : le serveur résout le nom via `/resources?keywords=…` puis enchaîne avec la chaîne déjà en place v1.11.0.

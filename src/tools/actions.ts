@@ -554,7 +554,7 @@ export function registerActionTools(server: McpServer): void {
 
 Args:
   - keywords (string, optional): Termes de recherche
-  - candidateId, resourceId, contactId, companyId (string, optional): Filtrer par entité liée
+  - candidateId, resourceId, contactId, companyId (string, optional): Filtrer par entité liée. ℹ️ L'API \`/actions\` ignore les noms littéraux ; le tool MCP les transforme en préfixes \`keywords\` (\`CCON<id>\` / \`CAND<id>\` / \`CSOC<id>\` / \`COMP<id>\`) — validé en prod (\`contactId: "796"\` → 4 actions scopées vs 153 000 sur l'API brute). Alternative équivalente : \`boond_contacts_actions\` / \`boond_candidates_actions\` / \`boond_companies_actions\` / \`boond_resources_actions\`.
   - managerId (string, optional): Filtrer par auteur (créateur de l'action). Mappé sur \`perimeterManagers[]\` côté API.
   - dateFrom, dateTo (YYYY-MM-DD, optional): Bornes de période. Mappés sur \`startDate\` / \`endDate\` côté API.
   - period ('started' | 'created' | 'updated', défaut 'started'): Champ date filtré par dateFrom/dateTo
@@ -563,7 +563,7 @@ Args:
 
 Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type | par auteur | → entité liée | extrait du texte\`. Le label de type est résolu via \`data.setting.action\` (dictionnaire BoondManager, scopé par entité linkable, fusionné et mis en cache). L'auteur et l'entité liée sont résolus via le tableau JSON:API \`included\` de la réponse.
 
-ℹ️ Le filtre \`period: 'created'\` cible le champ \`started\` de l'action côté API BoondManager (et non la date de création réelle en base) — limitation côté API.`,
+ℹ️ Modes de \`period\` (vérifiés en prod sur l'API v9.1.58.0) : 'started' filtre \`startDate\`, 'created' filtre \`creationDate\`, 'updated' filtre \`updateDate\`. (Correction : la doc antérieure indiquait à tort que 'created' ciblait \`started\`.)`,
       inputSchema: ActionSearchSchema,
       annotations: {
         readOnlyHint: true,

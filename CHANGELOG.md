@@ -33,8 +33,17 @@ Trois bugs corrigés sur `boond_absences_search`, signalés par l'intégration d
 La doc RAML officielle (`https://doc.boondmanager.com/api-externe/raml-build/`) renvoie HTTP 403 sans authentification ; la vérification a été faite empiriquement par appels à l'API live (tenant `ca-boondmcp-vsm`, BoondManager v9.1.58.0, 2026-06-05) :
 - `GET /absences-reports/11855` confirme `type: "absencesreport"`, `attributes.absencesPeriods[] = [{startDate, endDate, duration, title, workUnitType: {name, reference, activityType}}]`, `relationships.resource.data.id`.
 - `GET /resources/{id}/absences-reports` retourne le même shape (test sur resource #20 → 122 rows, type `absencesreport`).
-- `GET /absences?startDate=...&endDate=...` retourne le même nombre de rows que sans filtres (17 110) → filtre ignoré par l'API.
+- `GET /absences?startDate=...&endDate=...` retourne le même nombre de rows que sans filtres (17 110) → filtre ignoré par l'API legacy.
 - `GET /absences-reports/19336` → 404 (entité inexistante côté endpoint canonique → confirme que `/absences` listait des IDs externes au schéma).
+- `GET /absences-reports` sans bornes → **422 `1017 - Missing required attribute (parameter: endMonth) | 1017 - Missing required attribute (parameter: startMonth)`** : l'API surface elle-même les noms canoniques (`startMonth`/`endMonth`, YYYY-MM). C'est cette source d'autorité (le message d'erreur API live, qui ne peut pas mentir) qui a piloté l'implémentation finale, plus fiable qu'une RAML inaccessible.
+
+### Validation prod (révision `ca-boondmcp-vsm--0000054`, image `sha-8a83762`)
+
+- **T1 critère 1** : `boond_absences_search({startDate: "2026-04-21", endDate: "2026-05-20"})` → **129 périodes** scopées (vs 17 110 baseline) sur 252 absences-reports scannés. Filtrage drastique et correct.
+- **T2 critère 2** : chaque ligne porte nom + prénom + dates + type. Exemple : `[absencesreport #12251] DRIDI Nadhem | 2026-05-09 → 2026-05-15 (7j) | Maladie · validated`.
+- **T4 cas limites** : fenêtre same-date (1 jour) retient les périodes à cheval (PRZYBYLSKI 2026-04-21 → 2026-04-30 capturé sur fenêtre 2026-04-26 → 2026-04-26).
+- **T5 demi-journées + multi-jours + états non-validés** : tous présents dans le rendu (`BLUM Adeline · 0.5j · Après midi`, `RAMANAMBONINA · rejected`, `BLAISE · waitingForValidation`).
+- **T3 + T6 non-régression** : `absences_get(6593)` toujours OK ; `planning_absences_search` toujours OK (610 résultats inchangés).
 
 ### Documenté / Corrigé (PR #1, mergée précédemment)
 

@@ -42,24 +42,32 @@ import { registerPoleTools } from "./tools/poles.js";
 import { registerReportingTools } from "./tools/reporting.js";
 import { registerPlanningAbsenceTools } from "./tools/planning-absences.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
+import { registerDocumentTools } from "./tools/documents.js";
 
 const REQUIRED_ENV = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_KEYVAULT_URL"];
 REQUIRED_ENV.forEach((k) => {
-  if (!process.env[k]) { console.error("Missing env var: " + k); process.exit(1); }
+  if (!process.env[k]) {
+    console.error("Missing env var: " + k);
+    process.exit(1);
+  }
 });
 
-const PORT           = parseInt(process.env.PORT ?? "3000", 10);
-const AZURE_TENANT   = process.env.AZURE_TENANT_ID!;
-const AZURE_CLIENT   = process.env.AZURE_CLIENT_ID!;
-const MCP_BASE_URL   = process.env.MCP_BASE_URL ??
-  "https://ca-boondmcp-vsm.grayglacier-c341f9e8.francecentral.azurecontainerapps.io";
+const PORT = parseInt(process.env.PORT ?? "3000", 10);
+const AZURE_TENANT = process.env.AZURE_TENANT_ID!;
+const AZURE_CLIENT = process.env.AZURE_CLIENT_ID!;
+const MCP_BASE_URL =
+  process.env.MCP_BASE_URL ?? "https://ca-boondmcp-vsm.grayglacier-c341f9e8.francecentral.azurecontainerapps.io";
 const OAUTH_CALLBACK = `${MCP_BASE_URL}/oauth/callback`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // USER REGISTRY — per-user token → email mapping
 // MCP_USER_n_TOKEN + MCP_USER_n_EMAIL (n = 1, 2, 3, ...)
 // ─────────────────────────────────────────────────────────────────────────────
-interface UserEntry { token: string; email: string; cachedJwt: string; }
+interface UserEntry {
+  token: string;
+  email: string;
+  cachedJwt: string;
+}
 function buildUserRegistry(): Map<string, UserEntry> {
   const registry = new Map<string, UserEntry>();
   let n = 1;
@@ -126,14 +134,15 @@ function registerAllTools(server: McpServer): void {
   registerReportingTools(server);
   registerPlanningAbsenceTools(server);
   registerWorkflowTools(server);
+  registerDocumentTools(server);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OAUTH — authorization server proxying Microsoft Entra
 // ─────────────────────────────────────────────────────────────────────────────
 interface PendingFlow {
-  clientRedirectUri: string;  // Claude.ai callback URL
-  clientState: string;        // state sent by Claude.ai
+  clientRedirectUri: string; // Claude.ai callback URL
+  clientState: string; // state sent by Claude.ai
   codeChallenge: string;
   codeChallengeMethod: string;
   expiresAt: number;
@@ -151,15 +160,15 @@ interface OAuthSession {
   expiresAt: number;
 }
 
-const pendingFlows  = new Map<string, PendingFlow>();   // our state → flow
-const oauthCodes    = new Map<string, OAuthCode>();     // our code → info
-const oauthSessions = new Map<string, OAuthSession>();  // Bearer token → session
+const pendingFlows = new Map<string, PendingFlow>(); // our state → flow
+const oauthCodes = new Map<string, OAuthCode>(); // our code → info
+const oauthSessions = new Map<string, OAuthSession>(); // Bearer token → session
 
 // Cleanup every 5 min
 setInterval(() => {
   const now = Date.now();
-  for (const [k, v] of pendingFlows)  if (v.expiresAt < now) pendingFlows.delete(k);
-  for (const [k, v] of oauthCodes)    if (v.expiresAt < now) oauthCodes.delete(k);
+  for (const [k, v] of pendingFlows) if (v.expiresAt < now) pendingFlows.delete(k);
+  for (const [k, v] of oauthCodes) if (v.expiresAt < now) oauthCodes.delete(k);
   for (const [k, v] of oauthSessions) if (v.expiresAt < now) oauthSessions.delete(k);
 }, 5 * 60_000).unref();
 
@@ -179,14 +188,16 @@ async function resolveUser(
   req: express.Request,
   res: express.Response
 ): Promise<{ email: string; boondJwt: string } | null> {
-  const auth     = (req.headers["authorization"] ?? "") as string;
-  const fromHdr  = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const fromQs   = (req.query.token as string) ?? "";
+  const auth = (req.headers["authorization"] ?? "") as string;
+  const fromHdr = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const fromQs = (req.query.token as string) ?? "";
   const provided = fromHdr || fromQs;
 
   if (!provided) {
-    res.setHeader("WWW-Authenticate",
-      `Bearer realm="${MCP_BASE_URL}", resource_metadata="${MCP_BASE_URL}/.well-known/oauth-authorization-server"`);
+    res.setHeader(
+      "WWW-Authenticate",
+      `Bearer realm="${MCP_BASE_URL}", resource_metadata="${MCP_BASE_URL}/.well-known/oauth-authorization-server"`
+    );
     res.status(401).json({ error: "unauthorized", error_description: "Authentication required" });
     return null;
   }
@@ -224,7 +235,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 app.get("/health", (_req, res) => {
-  const users = Array.from(_users.values()).map(u => ({ email: u.email, jwtReady: !!u.cachedJwt }));
+  const users = Array.from(_users.values()).map((u) => ({ email: u.email, jwtReady: !!u.cachedJwt }));
   res.json({ status: "ok", version: "1.0.0-vsm", users, oauthSessions: oauthSessions.size });
 });
 
@@ -310,23 +321,23 @@ app.get("/oauth/callback", async (req, res) => {
 
   try {
     // Exchange code with Entra
-    const tokenResp = await fetch(
-      `https://login.microsoftonline.com/${AZURE_TENANT}/oauth2/v2.0/token`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: AZURE_CLIENT,
-          client_secret: clientSecret,
-          code,
-          redirect_uri: OAUTH_CALLBACK,
-          grant_type: "authorization_code",
-          scope: "openid email profile",
-        }),
-      }
-    );
+    const tokenResp = await fetch(`https://login.microsoftonline.com/${AZURE_TENANT}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: AZURE_CLIENT,
+        client_secret: clientSecret,
+        code,
+        redirect_uri: OAUTH_CALLBACK,
+        grant_type: "authorization_code",
+        scope: "openid email profile",
+      }),
+    });
     const tokenData = (await tokenResp.json()) as {
-      access_token?: string; id_token?: string; error?: string; error_description?: string;
+      access_token?: string;
+      id_token?: string;
+      error?: string;
+      error_description?: string;
     };
 
     if (tokenData.error || !tokenData.id_token) {
@@ -348,15 +359,18 @@ app.get("/oauth/callback", async (req, res) => {
       return;
     }
 
-    // Verify Boondmanager credentials exist for this user
-    let boondJwt: string;
+    // Verify Boondmanager credentials exist for this user (throw = missing).
+    // The JWT itself is re-fetched later at the token-exchange step, so we
+    // don't keep the value here — this is purely an existence check.
     try {
-      boondJwt = await getBoondJwtForUser(email);
+      await getBoondJwtForUser(email);
     } catch (err) {
       console.error("[OAUTH] No Boondmanager credentials for:", email, err);
-      res.status(403).send(
-        `No Boondmanager credentials configured for ${email}. Ask your administrator to run: add_user.py ${email} TOKEN`
-      );
+      res
+        .status(403)
+        .send(
+          `No Boondmanager credentials configured for ${email}. Ask your administrator to run: add_user.py ${email} TOKEN`
+        );
       return;
     }
 
@@ -391,8 +405,10 @@ app.post("/oauth/token", async (req, res) => {
   const configuredClientSecret = process.env.OAUTH_CLIENT_SECRET;
   const { client_id: incomingClientId, client_secret: incomingClientSecret } = req.body as Record<string, string>;
   if (configuredClientId && incomingClientId) {
-    if (incomingClientId !== configuredClientId ||
-        (configuredClientSecret && incomingClientSecret !== configuredClientSecret)) {
+    if (
+      incomingClientId !== configuredClientId ||
+      (configuredClientSecret && incomingClientSecret !== configuredClientSecret)
+    ) {
       res.status(401).json({ error: "invalid_client" });
       return;
     }
@@ -402,8 +418,12 @@ app.post("/oauth/token", async (req, res) => {
   if (grant_type === "client_credentials") {
     const orgEmail = process.env.MCP_USER_1_EMAIL ?? "benoit.koch@versusmind.eu";
     let boondJwt: string;
-    try { boondJwt = await getBoondJwtForUser(orgEmail); }
-    catch { res.status(503).json({ error: "temporarily_unavailable" }); return; }
+    try {
+      boondJwt = await getBoondJwtForUser(orgEmail);
+    } catch {
+      res.status(503).json({ error: "temporarily_unavailable" });
+      return;
+    }
     const accessToken = `org-${randomBytes(32).toString("hex")}`;
     oauthSessions.set(accessToken, { email: orgEmail, boondJwt, expiresAt: Date.now() + 24 * 3600_000 });
     console.log("[OAUTH] client_credentials token issued for org user:", orgEmail);
@@ -444,9 +464,9 @@ app.post("/oauth/token", async (req, res) => {
   }
 
   const accessToken = `oauth-${randomBytes(32).toString("hex")}`;
-  const expiresIn   = 8 * 3600; // 8 hours
+  const expiresIn = 8 * 3600; // 8 hours
   oauthSessions.set(accessToken, {
-    email:     authCode.email,
+    email: authCode.email,
     boondJwt,
     expiresAt: Date.now() + expiresIn * 1000,
   });
@@ -466,7 +486,10 @@ async function handleMcp(req: express.Request, res: express.Response): Promise<v
   const server = new McpServer({ name: "boondmanager-vsm", version: "1.0.0" });
   registerAllTools(server);
 
-  res.on("close", () => { void transport.close(); void server.close(); });
+  res.on("close", () => {
+    void transport.close();
+    void server.close();
+  });
 
   await requestContext.run({ userEmail: user.email, boondJwt: user.boondJwt }, async () => {
     await server.connect(transport);
@@ -475,8 +498,17 @@ async function handleMcp(req: express.Request, res: express.Response): Promise<v
 }
 
 // Alias routes for OAuth clients that construct URLs from issuer (RFC 8414)
-app.get("/authorize", (req, res) => res.redirect(307, "/oauth/authorize?" + new URLSearchParams(req.query as Record<string,string>)));
-app.post("/token", (req, res, next) => { req.url = "/oauth/token"; next(); }, (req, res) => app._router.handle(req, res, () => {}));
+app.get("/authorize", (req, res) =>
+  res.redirect(307, "/oauth/authorize?" + new URLSearchParams(req.query as Record<string, string>))
+);
+app.post(
+  "/token",
+  (req, res, next) => {
+    req.url = "/oauth/token";
+    next();
+  },
+  (req, res) => app._router.handle(req, res, () => {})
+);
 app.get("/register", (_req, res) => res.status(501).json({ error: "not_supported" }));
 
 app.all("/sse", handleMcp);
@@ -485,7 +517,14 @@ app.all("/mcp", handleMcp);
 app.listen(PORT, () => {
   console.log("Boondmanager MCP Server (Versusmind) - port " + PORT);
   console.log("  OAuth    : " + MCP_BASE_URL + "/oauth/authorize");
-  console.log("  Users    : " + (_users.size > 0 ? Array.from(_users.values()).map(u => u.email).join(", ") : "none (OAuth only)"));
+  console.log(
+    "  Users    : " +
+      (_users.size > 0
+        ? Array.from(_users.values())
+            .map((u) => u.email)
+            .join(", ")
+        : "none (OAuth only)")
+  );
   console.log("  Tenant   : " + AZURE_TENANT);
   console.log("  KV URL   : " + process.env.AZURE_KEYVAULT_URL);
 });

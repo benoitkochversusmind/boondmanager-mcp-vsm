@@ -3,6 +3,30 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.12.0] - 2026-06-08
+
+Nouvel outil **`boond_documents_create`** — upload d'une pièce jointe et rattachement à une entité BoondManager (action, candidat, contact, société, opportunité, projet, ressource…) en un seul appel. Répond au besoin « attacher un fichier à une action ».
+
+### Ajouté
+
+- **Tool `boond_documents_create`** (`src/tools/documents.ts`) — encapsule l'endpoint multipart `POST /documents`. Le document est lié à son entité parente dès la création via `parentType` + `parentId` (pas d'étape de liaison séparée ; la relation `files` du parent se peuple automatiquement). Deux sources de fichier mutuellement exclusives :
+  - `fileUrl` : URL publiquement accessible — **BoondManager télécharge le fichier lui-même**, aucun binaire ne transite par le serveur MCP (recommandé).
+  - `fileName` + `fileContentBase64` : contenu encodé en base64 (à réserver aux petits fichiers).
+- **`uploadDocument()` dans `src/services/boond-client.ts`** — premier chemin **multipart/form-data** du client (jusqu'ici JSON-only). Réutilise l'auth per-user (JWT via AsyncLocalStorage) et le rate limiter partagé ; construit le corps via `FormData`/`Blob` natifs (Node 22) en laissant `fetch` dériver le boundary.
+- **Schéma `DocumentCreateSchema`** (`src/schemas/index.ts`) : `parentType` (enum des entités courantes), `parentId`, `fileUrl` OU `fileName` + `fileContentBase64`. La validation XOR de la source du fichier est faite dans le handler (erreur claire `isError`).
+
+### Vérification du contrat (API prod v9.1.58.1)
+
+Contrat sondé en direct puis verrouillé par un test d'écriture contrôlé (création action de test sur le contact #514 → upload `file` + `fileUrl` → vérification de la relation `files` → suppression de tout, aucun résidu) :
+- `POST /documents` est multipart-only (un POST JSON est rejeté). Champs requis : `file` **ou** `fileUrl`, plus `parentId` et `parentType`.
+- `parentType` = nom d'entité en minuscule (`action` confirmé).
+- Réponse : `{ data: { type: "document", id: "<n>_document", attributes: { name } } }` ; le parent expose alors `relationships.files = [{ id, type: "document" }]`.
+
+### Tests
+
+- **+7 tests** dans `src/tools/documents.test.ts` : enregistrement (1 tool, write/non-destructive), upload via `fileUrl`, upload via `fileName`+base64, rejet sans source, rejet double source, remontée d'erreur API en `isError`. **583 tests passants** (vs 576 en 1.11.2).
+- **TOOLS.md** régénéré : **171 tools** (vs 170), 12 prompts, 21 resources. Liste `TOOL_REGISTRARS` du générateur mise à jour.
+
 ## [1.11.2] - 2026-06-05
 
 Trois bugs corrigés sur `boond_absences_search`, signalés par l'intégration du datastore de prospection (cas d'usage : extraire les périodes d'absence sur une fenêtre glissante). Endpoint canonique, filtrage côté serveur MCP sur les périodes, et sortie enrichie nom/prénom/dates/type en un seul appel (plus de N+1).

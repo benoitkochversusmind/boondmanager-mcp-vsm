@@ -811,6 +811,58 @@ export const ResourceMissionsHistorySchema = z
 
 export type ResourceMissionsHistoryInput = z.infer<typeof ResourceMissionsHistorySchema>;
 
+// ---- Document upload schema (pièces jointes) ----
+
+export const DocumentCreateSchema = z
+  .object({
+    parentType: z
+      .enum([
+        "action",
+        "candidate",
+        "contact",
+        "company",
+        "opportunity",
+        "project",
+        "resource",
+        "delivery",
+        "invoice",
+        "order",
+        "product",
+        "positioning",
+      ])
+      .describe(
+        "Type de l'entité à laquelle rattacher le document (nom d'entité en minuscule). " +
+          "Ex: `action` pour attacher la pièce jointe à une action. L'API BoondManager valide ce champ."
+      ),
+    parentId: z
+      .string()
+      .min(1)
+      .describe("ID numérique de l'entité parente (ex: l'ID de l'action). À combiner avec parentType."),
+    fileUrl: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "URL publiquement accessible du fichier à attacher. BoondManager télécharge le fichier lui-même " +
+          "(aucun binaire ne transite par le serveur MCP). Alternative à fileName + fileContentBase64."
+      ),
+    fileName: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Nom du fichier (avec extension, ex: `cr-reunion.pdf`). Requis avec fileContentBase64."),
+    fileContentBase64: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Contenu binaire du fichier encodé en base64. Requis avec fileName. " +
+          "À réserver aux petits fichiers (le base64 gonfle le contexte) ; préférer fileUrl quand un lien existe."
+      ),
+  })
+  .strict();
+export type DocumentCreateInput = z.infer<typeof DocumentCreateSchema>;
+
 // ---- Timesheet schemas ----
 
 export const ResourceTimesheetSchema = z

@@ -520,6 +520,81 @@ export async function apiRequest(
   throw lastError ?? new Error("BoondManager API request exhausted retries with no recorded error.");
 }
 
+/**
+ * Upload a file to BoondManager and attach it to a parent entity in one call.
+ *
+ * BoondManager's `/documents` endpoint is multipart-only (a plain JSON POST is
+ * rejected) and links the document to its parent at creation time via
+ * `parentType` + `parentId` — there is no separate "link" step. Two mutually
+ * exclusive file sources are accepted by the API:
+ *   - `fileUrl`  : a URL the BoondManager server fetches itself (no binary
+ *                  transits through the MCP server — ideal for MCP).
+ *   - `file`     : the raw bytes (here decoded from base64) sent as a multipart
+ *                  part with a filename.
+ *
+ * Contract verified live against the prod API (v9.1.58.1): a successful POST
+ * returns `{ data: { type: "document", id: "<n>_document", attributes: { name } } }`
+ * and the parent's `relationships.files` is populated automatically.
+ *
+ * Reuses the per-request auth (AsyncLocalStorage JWT) and the shared rate
+ * limiter, like apiRequest. Single attempt (uploads are non-idempotent).
+ */
+export interface UploadDocumentParams {
+  parentType: string;
+  parentId: string;
+  fileUrl?: string;
+  fileName?: string;
+  fileContentBase64?: string;
+}
+
+export async function uploadDocument(params: UploadDocumentParams): Promise<JsonApiResponse> {
+  const { baseUrl, authHeaderName, authHeaderValue } = getConfig();
+
+  const form = new FormData();
+  form.set("parentType", params.parentType);
+  form.set("parentId", params.parentId);
+
+  if (params.fileUrl) {
+    form.set("fileUrl", params.fileUrl);
+  } else if (params.fileContentBase64 && params.fileName) {
+    const bytes = Buffer.from(params.fileContentBase64, "base64");
+    form.set("file", new Blob([bytes]), params.fileName);
+  } else {
+    throw new Error("uploadDocument: fournir soit `fileUrl`, soit `fileName` + `fileContentBase64`.");
+  }
+
+  const timeoutMs = resolveTimeoutMs();
+  const limiter = getRateLimiter();
+  if (limiter) await limiter.acquire();
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/documents`, {
+      method: "POST",
+      // NB: do NOT set Content-Type — fetch derives the multipart boundary
+      // from the FormData body. Setting it manually breaks the parse.
+      headers: { [authHeaderName]: authHeaderValue, Accept: "application/json" },
+      body: form,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new Error(
+        `BoondManager document upload timed out after ${timeoutMs}ms\nEndpoint: POST /documents\n` +
+          "Hint: Increase BOOND_HTTP_TIMEOUT_MS or check connectivity / file size.",
+        { cause: err }
+      );
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(formatApiError(response.status, response.statusText, "POST", "/documents", errorText));
+  }
+  return (await response.json()) as JsonApiResponse;
+}
+
 export function buildSearchQuery(params: SearchParams): Record<string, QueryValue> {
   const query: Record<string, QueryValue> = {};
 

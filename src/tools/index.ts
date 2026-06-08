@@ -35,3 +35,4 @@ export { registerPoleTools } from "./poles.js";
 export { registerReportingTools } from "./reporting.js";
 export { registerPlanningAbsenceTools } from "./planning-absences.js";
 export { registerWorkflowTools } from "./workflows.js";
+export { registerDocumentTools } from "./documents.js";

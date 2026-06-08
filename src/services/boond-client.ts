@@ -525,15 +525,18 @@ export async function apiRequest(
  *
  * BoondManager's `/documents` endpoint is multipart-only (a plain JSON POST is
  * rejected) and links the document to its parent at creation time via
- * `parentType` + `parentId` — there is no separate "link" step. Two mutually
- * exclusive file sources are accepted by the API:
- *   - `fileUrl`  : a URL the BoondManager server fetches itself (no binary
- *                  transits through the MCP server — ideal for MCP).
- *   - `file`     : the raw bytes (here decoded from base64) sent as a multipart
- *                  part with a filename.
+ * `parentType` + `parentId` — there is no separate "link" step. File sources
+ * (exactly one), in priority order:
+ *   - `fileBuffer` (+ `fileName`) : raw bytes already in memory — used by the
+ *     out-of-band HTTP upload endpoint (multi-Mo, bytes never touch the LLM)
+ *     and by the tool's base64 path (decoded to a Buffer first).
+ *   - `fileUrl`  : a URL the BoondManager server fetches itself — no binary
+ *     transits through the MCP server at all (ideal; SAS/token URLs work since
+ *     Boond does the fetch, so there is no SSRF surface on our side).
  *
- * Contract verified live against the prod API (v9.1.58.1): a successful POST
- * returns `{ data: { type: "document", id: "<n>_document", attributes: { name } } }`
+ * Boond enforces a hard 15 Mo cap per attachment (verified live: 10 Mo OK,
+ * 20 Mo → 422 "exceeds 15 Mo"). A successful POST returns
+ * `{ data: { type: "document", id: "<n>_document", attributes: { name } } }`
  * and the parent's `relationships.files` is populated automatically.
  *
  * Reuses the per-request auth (AsyncLocalStorage JWT) and the shared rate
@@ -544,7 +547,8 @@ export interface UploadDocumentParams {
   parentId: string;
   fileUrl?: string;
   fileName?: string;
-  fileContentBase64?: string;
+  /** Raw file bytes (out-of-band endpoint, or decoded base64 from the tool). */
+  fileBuffer?: Buffer;
 }
 
 export async function uploadDocument(params: UploadDocumentParams): Promise<JsonApiResponse> {
@@ -554,13 +558,14 @@ export async function uploadDocument(params: UploadDocumentParams): Promise<Json
   form.set("parentType", params.parentType);
   form.set("parentId", params.parentId);
 
-  if (params.fileUrl) {
+  if (params.fileBuffer && params.fileName) {
+    // Cast: a Node Buffer is a valid BlobPart at runtime; the DOM lib's BlobPart
+    // type is stricter about ArrayBuffer vs ArrayBufferLike (SharedArrayBuffer).
+    form.set("file", new Blob([params.fileBuffer as unknown as BlobPart]), params.fileName);
+  } else if (params.fileUrl) {
     form.set("fileUrl", params.fileUrl);
-  } else if (params.fileContentBase64 && params.fileName) {
-    const bytes = Buffer.from(params.fileContentBase64, "base64");
-    form.set("file", new Blob([bytes]), params.fileName);
   } else {
-    throw new Error("uploadDocument: fournir soit `fileUrl`, soit `fileName` + `fileContentBase64`.");
+    throw new Error("uploadDocument: fournir soit `fileBuffer` + `fileName`, soit `fileUrl`.");
   }
 
   const timeoutMs = resolveTimeoutMs();

@@ -3,6 +3,35 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.13.0] - 2026-06-08
+
+Upload de pièces jointes **multi-Mo** sans faire transiter les octets par le flux de tokens du LLM. Complète `boond_documents_create` (1.12.0), dont le mode base64 était plafonné par la limite de tokens de sortie (~750 Ko, troncature silencieuse au-delà).
+
+### Contexte (vérifié en prod)
+
+- **BoondManager plafonne les pièces jointes à 15 Mo** (sondé : 10 Mo OK, 20 Mo → 422 « exceeds 15 Mo »). L'objectif réel est donc « ≤ 15 Mo de façon fiable », pas « centaines de Mo » — 15 Mo tient sans peine en mémoire serveur.
+- Le serveur tourne en **multi-replica** (max 10, `affinity=none`) : un staging local + `uploadId` (2 requêtes) pourrait taper 2 replicas différents. Choix retenu : **endpoint one-shot** (1 requête, pas de staging, robuste en multi-replica, aucune dépendance Azure nouvelle).
+
+### Ajouté
+
+- **Endpoint HTTP hors-bande `POST /documents/upload`** (`src/index.ts`) — même auth Bearer que `/mcp` (session OAuth ou token statique par utilisateur). Reçoit les **octets bruts** (`--data-binary`), `parentType`/`parentId`/`fileName` en query string, et forwarde directement vers `POST /documents` de Boond sous l'identité de l'utilisateur (JWT via AsyncLocalStorage). Les octets **ne passent jamais par le LLM**. Monté avant les parsers JSON globaux (corps brut via `express.raw`, plafond `MAX_DOCUMENT_BYTES` = 15 Mo, 413 propre au-delà). Usage type (Cowork) : `curl -X POST "$URL/documents/upload?parentType=action&parentId=12345&fileName=cr.pdf" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/octet-stream" --data-binary @cr.pdf`.
+- **`fileUrl` documenté pour les liens pré-signés / SAS** (SharePoint, Blob) — comme c'est **Boond** qui télécharge l'URL (et non notre serveur), aucun binaire ne transite ni par le LLM ni par le MCP, et il n'y a **aucune surface SSRF** de notre côté. Voie idéale pour les gros fichiers déjà accessibles par lien.
+- **`uploadDocument` (`src/services/boond-client.ts`)** accepte désormais une source `fileBuffer` (`Buffer`) en plus de `fileUrl`, partagée par l'endpoint (octets bruts) et par le mode base64 du tool (décodé en `Buffer`).
+
+### Durci
+
+- **Cap dur sur le mode base64 de `boond_documents_create`** : au-delà de `MAX_DOCUMENT_BASE64_CHARS` (~1 Mo de base64 ≈ 750 Ko de fichier), le tool **refuse proprement** avec un message renvoyant vers `fileUrl` ou l'endpoint d'upload — évite la troncature silencieuse de l'argument (fichier corrompu). Description du tool réécrite pour hiérarchiser les voies (fileUrl > endpoint > base64).
+
+### Tests
+
+- **+3 tests** `uploadDocument` (`boond-client.test.ts`) : POST multipart `/documents` avec part `file` (fileBuffer), `fileUrl` en champ de formulaire (SAS, pas de binaire), rejet sans source. **+1 test** `documents.test.ts` : rejet base64 au-delà du cap (sans appel API) + décodage base64 → `Buffer` avant forward. **587 tests passants** (vs 584 en 1.12.0).
+
+### Notes & limites
+
+- Le flux out-of-band suppose un client capable de POSTer un fichier (shell **Cowork** → `curl`) ; il n'est pas disponible dans Claude.ai chat pur (pas d'accès HTTP arbitraire). Pour ce cas, utiliser `fileUrl`.
+- Endpoint **non couvert par les tests unitaires** (vit dans `index.ts`, point d'entrée à effets de bord) — validé en prod par un test contrôlé (5 Mo sur contact #514, créé puis supprimé).
+- `fileContentBase64` (≤ ~750 Ko) conservé pour les petits fichiers.
+
 ## [1.12.0] - 2026-06-08
 
 Nouvel outil **`boond_documents_create`** — upload d'une pièce jointe et rattachement à une entité BoondManager (action, candidat, contact, société, opportunité, projet, ressource…) en un seul appel. Répond au besoin « attacher un fichier à une action ».

@@ -57,7 +57,7 @@ describe("boond_documents_create handler", () => {
     expect(res.content[0].text).toContain("cr.pdf");
   });
 
-  it("uploads via fileName + base64", async () => {
+  it("uploads via fileName + base64 (decoded to a Buffer before forwarding)", async () => {
     const spy = vi.spyOn(boondClient, "uploadDocument").mockResolvedValue({
       data: { id: "1_document", type: "document", attributes: { name: "note.txt" } },
     } as never);
@@ -67,7 +67,25 @@ describe("boond_documents_create handler", () => {
 
     await handler({ parentType: "contact", parentId: "514", fileName: "note.txt", fileContentBase64: "aGVsbG8=" });
 
-    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ fileName: "note.txt", fileContentBase64: "aGVsbG8=" }));
+    const arg = spy.mock.calls[0][0] as { fileName?: string; fileBuffer?: Buffer; fileContentBase64?: string };
+    expect(arg.fileName).toBe("note.txt");
+    expect(arg.fileContentBase64).toBeUndefined();
+    expect(Buffer.isBuffer(arg.fileBuffer)).toBe(true);
+    expect((arg.fileBuffer as Buffer).toString()).toBe("hello"); // aGVsbG8= -> "hello"
+  });
+
+  it("rejects a base64 payload over the hard cap (no API call)", async () => {
+    const spy = vi.spyOn(boondClient, "uploadDocument").mockResolvedValue({ data: null } as never);
+    const server = createMockServer();
+    registerDocumentTools(server);
+    const handler = getHandler(server);
+
+    const huge = "A".repeat(1_048_576 + 10); // just over MAX_DOCUMENT_BASE64_CHARS
+    const res = await handler({ parentType: "action", parentId: "1", fileName: "big.bin", fileContentBase64: huge });
+
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/trop volumineux|fileUrl|upload/i);
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("rejects when no file source is provided (no API call)", async () => {

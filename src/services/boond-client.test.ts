@@ -19,6 +19,7 @@ import {
   computeBackoffMs,
   resolveRateLimitConfig,
   resetRateLimiterForTests,
+  uploadDocument,
 } from "./boond-client.js";
 import {
   CHARACTER_LIMIT,
@@ -1266,5 +1267,64 @@ describe("fetchTabResponse + formatTabAuto (Bug 1 — tab pagination)", () => {
     const resp = { data: { id: "1", type: "candidate", attributes: { firstName: "Alice" } } };
     const out = formatTabAuto(resp as never, "candidat");
     expect(out).toContain('"firstName": "Alice"');
+  });
+});
+
+describe("uploadDocument", () => {
+  beforeEach(() => {
+    process.env.BOOND_API_TOKEN = "test-token";
+    process.env.BOOND_HTTP_RATE_LIMIT_RPS = "0";
+    resetRateLimiterForTests();
+    initClient();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.BOOND_API_TOKEN;
+    delete process.env.BOOND_HTTP_RATE_LIMIT_RPS;
+    resetRateLimiterForTests();
+  });
+
+  function stubOk() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-length": "100" }),
+        json: () => Promise.resolve({ data: { id: "29481_document", type: "document", attributes: { name: "f" } } }),
+      })
+    );
+  }
+
+  it("POSTs multipart to /documents with the file part when given a fileBuffer", async () => {
+    stubOk();
+    await uploadDocument({
+      parentType: "action",
+      parentId: "12345",
+      fileName: "cr.pdf",
+      fileBuffer: Buffer.from("hello"),
+    });
+    const [url, options] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/documents$/);
+    expect((options as RequestInit).method).toBe("POST");
+    const form = (options as RequestInit).body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect(form.get("parentType")).toBe("action");
+    expect(form.get("parentId")).toBe("12345");
+    expect(form.get("file")).toBeInstanceOf(Blob);
+    expect(form.get("fileUrl")).toBeNull();
+  });
+
+  it("sends fileUrl as a form field (no binary) when given a fileUrl", async () => {
+    stubOk();
+    await uploadDocument({ parentType: "action", parentId: "12345", fileUrl: "https://x/cr.pdf?sas=token" });
+    const form = (vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as FormData;
+    expect(form.get("fileUrl")).toBe("https://x/cr.pdf?sas=token");
+    expect(form.get("file")).toBeNull();
+  });
+
+  it("throws when no file source is provided", async () => {
+    stubOk();
+    await expect(uploadDocument({ parentType: "action", parentId: "1" })).rejects.toThrow(/fileBuffer|fileUrl/);
   });
 });

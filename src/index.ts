@@ -43,6 +43,8 @@ import { registerReportingTools } from "./tools/reporting.js";
 import { registerPlanningAbsenceTools } from "./tools/planning-absences.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
 import { registerDocumentTools } from "./tools/documents.js";
+import { uploadDocument } from "./services/boond-client.js";
+import { MAX_DOCUMENT_BYTES } from "./constants.js";
 
 const REQUIRED_ENV = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_KEYVAULT_URL"];
 REQUIRED_ENV.forEach((k) => {
@@ -231,6 +233,73 @@ async function resolveUser(
 // ─────────────────────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors({ origin: "*", methods: ["GET", "POST", "DELETE", "OPTIONS"] }));
+
+// ── Out-of-band document upload (large attachments) ──────────────────────────
+// Mounted BEFORE the global json/urlencoded parsers so the raw binary body is
+// not consumed by them. Same Bearer auth as /mcp. The client (typically the
+// Cowork shell) POSTs the raw file bytes; parentType/parentId/fileName travel
+// as query params, e.g.:
+//   curl -X POST \
+//     "$URL/documents/upload?parentType=action&parentId=12345&fileName=cr.pdf" \
+//     -H "Authorization: Bearer $TOKEN" \
+//     -H "Content-Type: application/octet-stream" \
+//     --data-binary @cr.pdf
+// The bytes never pass through the LLM. Boond caps attachments at 15 Mo; we
+// guard memory at MAX_DOCUMENT_BYTES and let Boond surface its own 422 if over.
+app.post("/documents/upload", express.raw({ type: () => true, limit: MAX_DOCUMENT_BYTES }), async (req, res) => {
+  const user = await resolveUser(req, res);
+  if (!user) return; // resolveUser already wrote the 401/503
+
+  const parentType = (req.query.parentType as string) ?? "";
+  const parentId = (req.query.parentId as string) ?? "";
+  const fileName = (req.query.fileName as string) ?? "";
+  const body = req.body as Buffer | undefined;
+
+  if (!parentType || !parentId) {
+    res.status(400).json({ error: "bad_request", detail: "parentType et parentId (query) sont requis." });
+    return;
+  }
+  if (!fileName) {
+    res.status(400).json({ error: "bad_request", detail: "fileName (query) est requis." });
+    return;
+  }
+  if (!body || !Buffer.isBuffer(body) || body.length === 0) {
+    res.status(400).json({ error: "bad_request", detail: "Corps binaire vide. Envoyer le fichier en --data-binary." });
+    return;
+  }
+
+  try {
+    const result = await requestContext.run({ userEmail: user.email, boondJwt: user.boondJwt }, () =>
+      uploadDocument({ parentType, parentId, fileName, fileBuffer: body })
+    );
+    const entity = Array.isArray(result.data) ? result.data[0] : result.data;
+    res.json({
+      ok: true,
+      documentId: entity?.id ?? null,
+      name: (entity?.attributes as Record<string, unknown> | undefined)?.["name"] ?? fileName,
+      parentType,
+      parentId,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[UPLOAD] failed:", message);
+    res.status(502).json({ error: "upload_failed", detail: message });
+  }
+});
+// Express raw() rejects oversize bodies with a PayloadTooLargeError — turn it
+// into a clean JSON 413 for this route.
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const e = err as { type?: string; status?: number } | undefined;
+  if (e && (e.type === "entity.too.large" || e.status === 413)) {
+    res.status(413).json({
+      error: "payload_too_large",
+      detail: "Fichier trop volumineux. Plafond BoondManager : 15 Mo par pièce jointe.",
+    });
+    return;
+  }
+  next(err);
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 

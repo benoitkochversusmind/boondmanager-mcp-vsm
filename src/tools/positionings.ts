@@ -78,8 +78,10 @@ export async function formatPositioningsList(response: JsonApiResponse): Promise
     const what = displayEntity(relRef(p, "project") ?? relRef(p, "opportunity"), inc);
 
     const parts: string[] = [`[positioning #${p.id}]`];
-    if (who) parts.push(who);
-    if (what) parts.push(`→ ${what}`);
+    // Combine the two linked entities into one segment so the "→" only ever
+    // sits between them — avoids a stray "· →" when one side is missing.
+    const link = [who, what].filter(Boolean).join(" → ");
+    if (link) parts.push(link);
 
     const stateNum = Number(a["state"]);
     if (Number.isFinite(stateNum)) parts.push(stateById?.get(stateNum) ?? `état ${stateNum}`);

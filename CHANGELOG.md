@@ -3,6 +3,10 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.13.2] - 2026-06-09
+
+Cosmétique : dans `formatPositioningsList`, les deux entités liées sont fusionnées en un seul segment `candidat/ressource → projet/opportunité`, de sorte que la flèche `→` n'apparaît qu'entre deux entités. Évite le séparateur orphelin `· →` quand un positionnement n'a pas de candidat/ressource résolu (cas « candidature annonce » lié à une opportunité seule). Aucun changement de comportement par ailleurs. 590 tests.
+
 ## [1.13.1] - 2026-06-09
 
 Les positionnements remontent désormais leur **date de création** et leur **date de mise à jour** (ainsi que l'état en clair, la période et les entités liées) dans les recherches et les onglets — ces champs étaient présents dans le payload BoondManager mais masqués par le formateur de liste générique.

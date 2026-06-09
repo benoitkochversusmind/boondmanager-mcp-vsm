@@ -1,7 +1,105 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PositioningSearchSchema, PositioningCreateSchema, IdSchema } from "../schemas/index.js";
-import { apiRequest, buildSearchQuery, formatListResponse, formatDetailResponse } from "../services/boond-client.js";
+import { apiRequest, buildSearchQuery, formatDetailResponse } from "../services/boond-client.js";
 import { buildJsonApiBody } from "./crud-factory.js";
+import { getStateMap } from "../services/dictionary.js";
+import type { JsonApiResponse, JsonApiResource } from "../types.js";
+
+// ---- Positioning list formatter --------------------------------------------
+//
+// The generic `formatEntitySummary` only surfaces name/state/title, so the
+// creationDate / updateDate that the BoondManager `/positionings` payload
+// actually carries (verified live) were invisible on search + tab outputs.
+// `formatPositioningsList` renders one line per positioning WITH those dates,
+// the (label-resolved) state, the period, and the linked entities — mirroring
+// the `formatActionsList` / `formatInvoiceList` pattern. Used by
+// `boond_positionings_search`, `boond_positionings_get`, and the
+// `boond_{candidates,resources,opportunities}_positionings` tab tools.
+
+const POSITIONING_INCLUDE = "candidate,resource,project,opportunity";
+
+function asAttrs(r: JsonApiResource): Record<string, unknown> {
+  return (r.attributes ?? {}) as Record<string, unknown>;
+}
+
+/** "2026-06-09T18:53:13+0200" → "2026-06-09 18:53" ; "" / non-string → null. */
+function fmtStamp(v: unknown): string | null {
+  if (typeof v !== "string" || v.length < 10) return null;
+  const date = v.slice(0, 10);
+  const time = v.length >= 16 ? v.slice(11, 16) : "";
+  return time ? `${date} ${time}` : date;
+}
+
+function indexIncluded(resp: JsonApiResponse): Map<string, JsonApiResource> {
+  const m = new Map<string, JsonApiResource>();
+  const inc = (resp as { included?: JsonApiResource[] }).included;
+  if (Array.isArray(inc)) {
+    for (const it of inc) if (it && it.id && it.type) m.set(`${it.type}:${it.id}`, it);
+  }
+  return m;
+}
+
+function relRef(r: JsonApiResource, key: string): { type: string; id: string } | null {
+  const rels = (r.relationships ?? {}) as Record<string, { data?: { type?: string; id?: string } | null }>;
+  const d = rels[key]?.data;
+  return d && d.id && d.type ? { type: d.type, id: d.id } : null;
+}
+
+function displayEntity(ref: { type: string; id: string } | null, inc: Map<string, JsonApiResource>): string | null {
+  if (!ref) return null;
+  const e = inc.get(`${ref.type}:${ref.id}`);
+  if (e) {
+    const a = asAttrs(e);
+    const name =
+      [a["firstName"], a["lastName"]].filter(Boolean).join(" ").trim() ||
+      (a["title"] as string) ||
+      (a["reference"] as string) ||
+      (a["name"] as string);
+    if (name) return `${name} (${ref.type} #${ref.id})`;
+  }
+  return `${ref.type} #${ref.id}`;
+}
+
+export async function formatPositioningsList(response: JsonApiResponse): Promise<string> {
+  const data = Array.isArray(response.data) ? response.data : response.data ? [response.data] : [];
+  if (data.length === 0) return "Aucun positionnement trouvé.";
+
+  let stateById: Map<number, string> | undefined;
+  try {
+    stateById = (await getStateMap("positioning")).byId;
+  } catch {
+    // Best effort — fall back to the numeric state if the dictionary is down.
+  }
+  const inc = indexIncluded(response);
+
+  const lines = data.map((p) => {
+    const a = asAttrs(p);
+    const who = displayEntity(relRef(p, "candidate") ?? relRef(p, "resource"), inc);
+    const what = displayEntity(relRef(p, "project") ?? relRef(p, "opportunity"), inc);
+
+    const parts: string[] = [`[positioning #${p.id}]`];
+    if (who) parts.push(who);
+    if (what) parts.push(`→ ${what}`);
+
+    const stateNum = Number(a["state"]);
+    if (Number.isFinite(stateNum)) parts.push(stateById?.get(stateNum) ?? `état ${stateNum}`);
+
+    const start = typeof a["startDate"] === "string" && a["startDate"] ? (a["startDate"] as string) : null;
+    const end = typeof a["endDate"] === "string" && a["endDate"] ? (a["endDate"] as string) : null;
+    if (start || end) parts.push(`${start ?? "?"} → ${end ?? "?"}`);
+
+    const created = fmtStamp(a["creationDate"]);
+    const updated = fmtStamp(a["updateDate"]);
+    if (created) parts.push(`créé ${created}`);
+    if (updated) parts.push(`MàJ ${updated}`);
+
+    return parts.join(" · ");
+  });
+
+  const total = (response as { meta?: { totals?: { rows?: number } } }).meta?.totals?.rows;
+  const header = total !== undefined ? `Total: ${total} positionnement(s)` : `${data.length} positionnement(s)`;
+  return [header, ...lines].join("\n");
+}
 
 export function registerPositioningTools(server: McpServer): void {
   // Search positionings
@@ -16,7 +114,7 @@ Args:
   - candidateId, resourceId, projectId, opportunityId (string, optional): Filtrer par entité liée
   - page, pageSize: Pagination
 
-Returns: Liste des positionnements correspondants.`,
+Returns: Une ligne par positionnement avec entité(s) liée(s), état (libellé), période, et **date de création + date de mise à jour**.`,
       inputSchema: PositioningSearchSchema,
       annotations: {
         readOnlyHint: true,
@@ -27,9 +125,10 @@ Returns: Liste des positionnements correspondants.`,
     },
     async (params) => {
       const query = buildSearchQuery(params);
+      query["include"] = POSITIONING_INCLUDE;
       const response = await apiRequest("/positionings", "GET", undefined, query);
       return {
-        content: [{ type: "text" as const, text: formatListResponse(response, "positionnement") }],
+        content: [{ type: "text" as const, text: await formatPositioningsList(response) }],
       };
     }
   );
@@ -39,7 +138,7 @@ Returns: Liste des positionnements correspondants.`,
     "boond_positionings_get",
     {
       title: "Détails d'un positionnement",
-      description: `Récupère les informations détaillées d'un positionnement par son ID.`,
+      description: `Récupère les informations détaillées d'un positionnement par son ID (état, période, date de création, date de mise à jour, simulation, entités liées).`,
       inputSchema: IdSchema,
       annotations: {
         readOnlyHint: true,
@@ -49,9 +148,13 @@ Returns: Liste des positionnements correspondants.`,
       },
     },
     async (params) => {
-      const response = await apiRequest(`/positionings/${params.id}`);
+      const response = await apiRequest(`/positionings/${params.id}`, "GET", undefined, {
+        include: POSITIONING_INCLUDE,
+      });
+      // Clean one-line summary (with the dates) on top of the full JSON:API payload.
+      const summary = await formatPositioningsList(response);
       return {
-        content: [{ type: "text" as const, text: formatDetailResponse(response) }],
+        content: [{ type: "text" as const, text: `${summary}\n\n${formatDetailResponse(response)}` }],
       };
     }
   );
@@ -84,10 +187,12 @@ Returns: Liste des positionnements correspondants.`,
       const response = await apiRequest("/positionings", "POST", body);
       const entity = Array.isArray(response.data) ? response.data[0] : response.data;
       return {
-        content: [{
-          type: "text" as const,
-          text: `✅ Positionnement créé avec succès.\nID: ${entity?.id}\n\n${formatDetailResponse(response)}`,
-        }],
+        content: [
+          {
+            type: "text" as const,
+            text: `✅ Positionnement créé avec succès.\nID: ${entity?.id}\n\n${formatDetailResponse(response)}`,
+          },
+        ],
       };
     }
   );

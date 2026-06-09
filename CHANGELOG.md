@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.13.1] - 2026-06-09
+
+Les positionnements remontent désormais leur **date de création** et leur **date de mise à jour** (ainsi que l'état en clair, la période et les entités liées) dans les recherches et les onglets — ces champs étaient présents dans le payload BoondManager mais masqués par le formateur de liste générique.
+
+### Corrigé / Enrichi
+
+- **`boond_positionings_search`** : rendu via un nouveau formateur dédié `formatPositioningsList` (au lieu de `formatEntitySummary` qui n'exposait que nom/état/titre). Chaque ligne affiche : entité(s) liée(s) (candidat/ressource → projet/opportunité, résolues via `include`), **état résolu en libellé** (dictionnaire `setting.state.positioning`), période `startDate → endDate`, et surtout **`créé <creationDate>` · `MàJ <updateDate>`**. La requête envoie désormais `include=candidate,resource,project,opportunity`.
+- **`boond_positionings_get`** : préfixe une ligne de synthèse (avec les dates) au-dessus du JSON:API complet, et envoie aussi `include=…` pour nommer les entités liées.
+- **Onglets `boond_{candidates,resources,opportunities}_positionings`** : `buildTabHandler` route désormais `tabName === "positionings"` vers `formatPositioningsList` (comme `actions` → `formatActionsList`). Les positionnements vus depuis une fiche candidat/ressource/opportunité affichent donc aussi les dates.
+
+### Vérifié en prod (API v9.1.58.1)
+
+Le payload `/positionings` expose bien `creationDate` et `updateDate` (format ISO `2026-06-09T18:53:13+0200`) en liste comme en détail — confirmé sur un positionnement réel. Le manque était purement côté formatage MCP.
+
+### Tests
+
+- **+3 tests** `formatPositioningsList` (`positionings.test.ts`) : dates + état (libellé) + période + entités liées surfacés ; fallback propre (état numérique + IDs) quand le dictionnaire est indisponible et `included` absent ; message vide. **590 tests passants** (vs 587 en 1.13.0).
+
 ## [1.13.0] - 2026-06-08
 
 Upload de pièces jointes **multi-Mo** sans faire transiter les octets par le flux de tokens du LLM. Complète `boond_documents_create` (1.12.0), dont le mode base64 était plafonné par la limite de tokens de sortie (~750 Ko, troncature silencieuse au-delà).

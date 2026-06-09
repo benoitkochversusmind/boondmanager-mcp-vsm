@@ -12,6 +12,7 @@ import {
 import { SearchSchema, IdSchema, IdTabSchema } from "../schemas/index.js";
 import type { SearchInput, IdInput, IdTabInput } from "../schemas/index.js";
 import { formatActionsList } from "./actions.js";
+import { formatPositioningsList } from "./positionings.js";
 
 interface CrudToolOptions {
   entityName: string; // ex: "candidat", "ressource"
@@ -49,7 +50,12 @@ export function buildTabHandler(
 ): (params: IdInput) => Promise<{ content: { type: "text"; text: string }[] }> {
   return async (params: IdInput) => {
     const response = await fetchTabResponse(`${apiPath}/${params.id}/${tabName}`);
-    const text = tabName === "actions" ? await formatActionsList(response) : formatTabAuto(response, entityName);
+    const text =
+      tabName === "actions"
+        ? await formatActionsList(response)
+        : tabName === "positionings"
+          ? await formatPositioningsList(response)
+          : formatTabAuto(response, entityName);
     return { content: [{ type: "text" as const, text }] };
   };
 }

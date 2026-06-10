@@ -532,6 +532,40 @@ export const CandidateUpdateSchema = z
   })
   .strict();
 
+// ---- Candidate technical-data (Dossier Technique) write schema ----
+
+export const CandidateTechnicalDataUpdateSchema = z
+  .object({
+    candidateId: z.string().min(1).describe("ID du candidat dont on met à jour le dossier technique"),
+    tools: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Outils / technos : libellés OU ids du dictionnaire setting.tool (ex: ['C#','React'] ou ['csharp','react'])"
+      ),
+    activityAreas: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Domaines : libellés OU ids du dictionnaire setting.activityArea (hiérarchique, feuilles Profils/Certifications)"
+      ),
+    expertiseAreas: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Secteurs restreints à S1–S12 : libellés OU ids du dictionnaire setting.expertiseArea (value contenant [S1]…[S12]). Hors S1–S12 rejeté."
+      ),
+    skills: z.string().optional().describe("Compétences en texte libre (attribut skills du DT)"),
+    experience: z.string().optional().describe("Niveau d'expérience : libellé résolu en id via setting.experience"),
+    languages: z.array(z.string()).optional().describe("Langues au format 'langueId|niveauId' (transmis tel quel)"),
+    mode: z
+      .enum(["merge", "replace"])
+      .default("merge")
+      .describe("merge (défaut, union sans doublon avec l'existant) ou replace (remplace les champs fournis)"),
+  })
+  .strict();
+export type CandidateTechnicalDataUpdateInput = z.infer<typeof CandidateTechnicalDataUpdateSchema>;
+
 // ---- Resource schemas ----
 
 export const ResourceCreateSchema = z

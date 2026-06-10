@@ -1,4 +1,5 @@
 export { registerCandidateTools } from "./candidates.js";
+export { registerCandidateTechnicalDataTools } from "./candidates-technical-data.js";
 export { registerResourceTools } from "./resources.js";
 export { registerContactTools } from "./contacts.js";
 export { registerCompanyTools } from "./companies.js";

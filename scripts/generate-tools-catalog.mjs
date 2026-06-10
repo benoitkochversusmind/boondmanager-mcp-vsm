@@ -61,7 +61,7 @@ const stub = {
 // Mirror the order in src/server.ts so the captured set is identical to a
 // real createMcpServer() boot.
 const TOOL_REGISTRARS = [
-  "registerCandidateTools", "registerResourceTools", "registerContactTools",
+  "registerCandidateTools", "registerCandidateTechnicalDataTools", "registerResourceTools", "registerContactTools",
   "registerCompanyTools", "registerOpportunityTools", "registerActionTools",
   "registerTimesheetTools", "registerProjectTools", "registerInvoiceTools",
   "registerOrderTools", "registerDeliveryTools", "registerAbsenceTools",

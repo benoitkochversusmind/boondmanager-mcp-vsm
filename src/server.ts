@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   registerCandidateTools,
+  registerCandidateTechnicalDataTools,
   registerResourceTools,
   registerContactTools,
   registerCompanyTools,
@@ -118,6 +119,7 @@ export function createMcpServer(): McpServer {
   });
 
   registerCandidateTools(server);
+  registerCandidateTechnicalDataTools(server);
   registerResourceTools(server);
   registerContactTools(server);
   registerCompanyTools(server);

@@ -1225,16 +1225,41 @@ export const ProductUpdateSchema = z
 
 export const PositioningCreateSchema = z
   .object({
-    candidateId: z.string().optional().describe("ID du candidat positionné"),
-    resourceId: z.string().optional().describe("ID de la ressource positionnée"),
-    projectId: z.string().optional().describe("ID du projet"),
-    opportunityId: z.string().optional().describe("ID de l'opportunité"),
-    state: z.number().int().optional().describe("État du positionnement"),
+    candidateId: z
+      .string()
+      .optional()
+      .describe(
+        "ID du candidat positionné (le consultant). Fournir candidateId OU resourceId — c'est la relation dependsOn."
+      ),
+    resourceId: z
+      .string()
+      .optional()
+      .describe(
+        "ID de la ressource positionnée (le consultant interne). Fournir candidateId OU resourceId — c'est la relation dependsOn."
+      ),
+    projectId: z.string().optional().describe("ID du projet cible. Fournir projectId OU opportunityId."),
+    opportunityId: z.string().optional().describe("ID de l'opportunité cible. Fournir projectId OU opportunityId."),
+    state: z
+      .number()
+      .int()
+      .optional()
+      .describe("État du positionnement (entier du dictionnaire setting.state.positioning)"),
     startDate: z.string().optional().describe("Date de début (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Date de fin (YYYY-MM-DD)"),
-    note: z.string().optional().describe("Notes / commentaires"),
+    note: z.string().optional().describe("Commentaires (mappé sur l'attribut informationComments de l'API)"),
   })
   .strict();
+
+export const PositioningUpdateSchema = z
+  .object({
+    id: z.string().min(1).describe("ID du positionnement à modifier"),
+    state: z.number().int().optional().describe("Nouvel état (entier du dictionnaire setting.state.positioning)"),
+    startDate: z.string().optional().describe("Date de début (YYYY-MM-DD)"),
+    endDate: z.string().optional().describe("Date de fin (YYYY-MM-DD)"),
+    note: z.string().optional().describe("Commentaires (mappé sur l'attribut informationComments de l'API)"),
+  })
+  .strict();
+export type PositioningUpdateInput = z.infer<typeof PositioningUpdateSchema>;
 
 export const PositioningSearchSchema = z
   .object({

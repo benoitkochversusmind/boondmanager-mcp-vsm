@@ -3,6 +3,22 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.15.0] - 2026-06-10
+
+Corrige la **création** de positionnements (cassée) et ajoute la **modification**.
+
+### Corrigé
+
+- **`boond_positionings_create` — relation `dependsOn` manquante** (`src/tools/positionings.ts`). Le handler envoyait `relationships.candidate` / `relationships.resource`, que l'API `/positionings` ignore → rejet systématique **« 1017 - Missing required attribute (dependsOn) »**. Le consultant est en réalité porté par la relation polymorphe **`dependsOn`** (type `candidate`|`resource`), comme pour les actions. Désormais : `candidateId → dependsOn{type:candidate}`, `resourceId → dependsOn{type:resource}`, et la cible via `opportunity`/`project`. Contrat vérifié en prod (création réelle puis suppression) : `dependsOn` **+** (`opportunity` OU `project`) sont les deux relations requises. Garde-fous serveur : erreur claire si aucun consultant ou aucune cible (avant l'appel API). `note` mappé sur l'attribut réel `informationComments`.
+
+### Ajouté
+
+- **`boond_positionings_update`** — modification d'un positionnement existant via `PUT /positionings/{id}` (état, période, commentaires ; seuls les champs fournis changent ; `note` → `informationComments`). Contrat vérifié en prod (PUT attributs → 200). Schéma `PositioningUpdateSchema`. Le serveur expose désormais **172 outils**.
+
+### Tests
+
+- **+5 tests** (`positionings.test.ts`) : create `candidateId → dependsOn(candidate)` + opportunity + `note → informationComments` ; create `resourceId → dependsOn(resource)` + project ; rejet sans consultant ; rejet sans cible ; update `PUT` + `note → informationComments`. Compte d'outils 4 → 5. **599 tests passants** (vs 594 en 1.14.1).
+
 ## [1.14.1] - 2026-06-09
 
 Les filtres par entité de `boond_positionings_search` (`candidateId` / `resourceId` / `projectId` / `opportunityId`) fonctionnent enfin : l'API `/positionings` ignore ces noms en query littérale, le serveur les route désormais via les **préfixes keyword BoondManager** (comme `boond_actions_search`).

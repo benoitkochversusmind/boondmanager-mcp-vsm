@@ -1,5 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PositioningSearchSchema, PositioningCreateSchema, IdSchema } from "../schemas/index.js";
+import {
+  PositioningSearchSchema,
+  PositioningCreateSchema,
+  PositioningUpdateSchema,
+  IdSchema,
+} from "../schemas/index.js";
+import type { PositioningUpdateInput } from "../schemas/index.js";
 import { apiRequest, buildSearchQuery, formatDetailResponse } from "../services/boond-client.js";
 import { buildJsonApiBody } from "./crud-factory.js";
 import { getStateMap } from "../services/dictionary.js";
@@ -211,7 +217,14 @@ Returns: Une ligne par positionnement avec **consultant** (Prénom NOM, candidat
     "boond_positionings_create",
     {
       title: "Créer un positionnement",
-      description: `Crée un nouveau positionnement pour placer un candidat ou une ressource sur un projet ou une opportunité.`,
+      description: `Crée un positionnement = place un consultant (candidat OU ressource) sur une cible (opportunité OU projet).
+
+L'API BoondManager exige DEUX relations :
+  - le consultant via \`dependsOn\` (polymorphe) → fournir candidateId OU resourceId ;
+  - la cible → fournir opportunityId OU projectId.
+Le serveur construit \`dependsOn\` automatiquement (candidateId → type candidate, resourceId → type resource). Sans consultant ou sans cible, l'appel est refusé côté serveur avec un message clair (l'API renvoie sinon « Missing required attribute: dependsOn »).
+
+Attributs optionnels : state (entier dictionnaire setting.state.positioning), startDate/endDate (YYYY-MM-DD), note (→ informationComments).`,
       inputSchema: PositioningCreateSchema,
       annotations: {
         readOnlyHint: false,
@@ -221,16 +234,43 @@ Returns: Une ligne par positionnement avec **consultant** (Prénom NOM, candidat
       },
     },
     async (params) => {
-      const { candidateId, resourceId, projectId, opportunityId, ...attrs } = params;
-      const body = buildJsonApiBody("positioning", attrs);
-      const relationships: Record<string, unknown> = {};
-      if (candidateId) relationships.candidate = { data: { id: candidateId, type: "candidate" } };
-      if (resourceId) relationships.resource = { data: { id: resourceId, type: "resource" } };
-      if (projectId) relationships.project = { data: { id: projectId, type: "project" } };
-      if (opportunityId) relationships.opportunity = { data: { id: opportunityId, type: "opportunity" } };
-      if (Object.keys(relationships).length > 0) {
-        (body as Record<string, Record<string, unknown>>).data.relationships = relationships;
+      const { candidateId, resourceId, projectId, opportunityId, note, ...rest } = params;
+
+      // Consultant → relation polymorphe `dependsOn` (candidate|resource), PAS
+      // `relationships.candidate/resource` (que l'API ignore → 422 dependsOn).
+      const consultant = candidateId
+        ? { id: candidateId, type: "candidate" }
+        : resourceId
+          ? { id: resourceId, type: "resource" }
+          : null;
+      if (!consultant) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Consultant manquant : fournir `candidateId` (candidat) ou `resourceId` (ressource).",
+            },
+          ],
+          isError: true,
+        };
       }
+      if (!opportunityId && !projectId) {
+        return {
+          content: [{ type: "text" as const, text: "Cible manquante : fournir `opportunityId` ou `projectId`." }],
+          isError: true,
+        };
+      }
+
+      // note → informationComments (nom d'attribut réel côté API).
+      const attrs: Record<string, unknown> = { ...rest };
+      if (note !== undefined) attrs["informationComments"] = note;
+
+      const body = buildJsonApiBody("positioning", attrs);
+      const relationships: Record<string, unknown> = { dependsOn: { data: consultant } };
+      if (opportunityId) relationships.opportunity = { data: { id: opportunityId, type: "opportunity" } };
+      if (projectId) relationships.project = { data: { id: projectId, type: "project" } };
+      (body as Record<string, Record<string, unknown>>).data.relationships = relationships;
+
       const response = await apiRequest("/positionings", "POST", body);
       const entity = Array.isArray(response.data) ? response.data[0] : response.data;
       return {
@@ -240,6 +280,35 @@ Returns: Une ligne par positionnement avec **consultant** (Prénom NOM, candidat
             text: `✅ Positionnement créé avec succès.\nID: ${entity?.id}\n\n${formatDetailResponse(response)}`,
           },
         ],
+      };
+    }
+  );
+
+  // Update positioning
+  server.registerTool(
+    "boond_positionings_update",
+    {
+      title: "Modifier un positionnement",
+      description: `Met à jour un positionnement existant (état, période, commentaires). Seuls les champs fournis sont modifiés.
+
+Args : id (requis), state (entier dictionnaire setting.state.positioning), startDate/endDate (YYYY-MM-DD), note (→ informationComments). Pour changer le consultant ou la cible, supprimer puis recréer.`,
+      inputSchema: PositioningUpdateSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (params) => {
+      const { id, note, ...rest } = params as PositioningUpdateInput;
+      const attrs: Record<string, unknown> = { ...rest };
+      if (note !== undefined) attrs["informationComments"] = note;
+      const body = buildJsonApiBody("positioning", attrs, id);
+      const response = await apiRequest(`/positionings/${id}`, "PUT", body);
+      const summary = await formatPositioningsList(response);
+      return {
+        content: [{ type: "text" as const, text: `✅ Positionnement #${id} mis à jour.\n${summary}` }],
       };
     }
   );

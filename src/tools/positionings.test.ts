@@ -17,9 +17,9 @@ describe("registerPositioningTools", () => {
     server = createMockServer();
   });
 
-  it("should register 4 positioning tools", () => {
+  it("should register 5 positioning tools", () => {
     registerPositioningTools(server);
-    expect(server.registerTool).toHaveBeenCalledTimes(4);
+    expect(server.registerTool).toHaveBeenCalledTimes(5);
   });
 
   it("should register all expected tool names", () => {
@@ -28,6 +28,7 @@ describe("registerPositioningTools", () => {
     expect(names).toContain("boond_positionings_search");
     expect(names).toContain("boond_positionings_get");
     expect(names).toContain("boond_positionings_create");
+    expect(names).toContain("boond_positionings_update");
     expect(names).toContain("boond_positionings_delete");
   });
 
@@ -207,5 +208,91 @@ describe("boond_positionings_search entity-filter routing", () => {
     expect(kw).toContain("COMP17537");
     expect(kw).toContain("AO4370");
     expect(kw).toContain("java");
+  });
+});
+
+describe("boond_positionings_create / _update", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function getHandler(name: string) {
+    const server = createMockServer();
+    registerPositioningTools(server);
+    const call = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === name);
+    return call![2] as (p: Record<string, unknown>) => Promise<{ isError?: boolean; content: { text: string }[] }>;
+  }
+
+  it("create: candidateId → dependsOn(candidate) + opportunity, note → informationComments", async () => {
+    const apiSpy = vi
+      .spyOn(boondClient, "apiRequest")
+      .mockResolvedValue({ data: { id: "14948", type: "positioning", attributes: {} } } as never);
+    const handler = getHandler("boond_positionings_create");
+
+    await handler({ candidateId: "34592", opportunityId: "4370", state: 1, note: "go" });
+
+    const [path, method, body] = apiSpy.mock.calls[0];
+    expect(path).toBe("/positionings");
+    expect(method).toBe("POST");
+    const data = (body as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> } })
+      .data;
+    expect(data.relationships).toEqual({
+      dependsOn: { data: { id: "34592", type: "candidate" } },
+      opportunity: { data: { id: "4370", type: "opportunity" } },
+    });
+    expect(data.attributes["informationComments"]).toBe("go");
+    expect(data.attributes["state"]).toBe(1);
+    expect(data.attributes).not.toHaveProperty("note");
+  });
+
+  it("create: resourceId → dependsOn(resource) + project", async () => {
+    const apiSpy = vi
+      .spyOn(boondClient, "apiRequest")
+      .mockResolvedValue({ data: { id: "1", type: "positioning", attributes: {} } } as never);
+    const handler = getHandler("boond_positionings_create");
+
+    await handler({ resourceId: "17537", projectId: "1864" });
+
+    const data = (apiSpy.mock.calls[0][2] as { data: { relationships: Record<string, unknown> } }).data;
+    expect(data.relationships).toEqual({
+      dependsOn: { data: { id: "17537", type: "resource" } },
+      project: { data: { id: "1864", type: "project" } },
+    });
+  });
+
+  it("create: rejects when no consultant (no API call)", async () => {
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: null } as never);
+    const handler = getHandler("boond_positionings_create");
+    const res = await handler({ opportunityId: "4370" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/candidateId|resourceId|[Cc]onsultant/);
+    expect(apiSpy).not.toHaveBeenCalled();
+  });
+
+  it("create: rejects when no target (no API call)", async () => {
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: null } as never);
+    const handler = getHandler("boond_positionings_create");
+    const res = await handler({ candidateId: "34592" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/opportunityId|projectId|[Cc]ible/);
+    expect(apiSpy).not.toHaveBeenCalled();
+  });
+
+  it("update: PUT /positionings/{id} with note → informationComments", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({ byId: new Map(), byLabel: new Map() } as never);
+    const apiSpy = vi
+      .spyOn(boondClient, "apiRequest")
+      .mockResolvedValue({ data: { id: "14948", type: "positioning", attributes: { state: 1 } } } as never);
+    const handler = getHandler("boond_positionings_update");
+
+    await handler({ id: "14948", state: 1, note: "MAJ" });
+
+    const [path, method, body] = apiSpy.mock.calls[0];
+    expect(path).toBe("/positionings/14948");
+    expect(method).toBe("PUT");
+    const data = (body as { data: { id: string; attributes: Record<string, unknown> } }).data;
+    expect(data.id).toBe("14948");
+    expect(data.attributes["informationComments"]).toBe("MAJ");
+    expect(data.attributes["state"]).toBe(1);
   });
 });

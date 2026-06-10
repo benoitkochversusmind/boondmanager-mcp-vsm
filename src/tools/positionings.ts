@@ -60,9 +60,30 @@ function displayEntity(ref: { type: string; id: string } | null, inc: Map<string
   return `${ref.type} #${ref.id}`;
 }
 
-export async function formatPositioningsList(response: JsonApiResponse): Promise<string> {
-  const data = Array.isArray(response.data) ? response.data : response.data ? [response.data] : [];
-  if (data.length === 0) return "Aucun positionnement trouvé.";
+// The consultant is carried by the polymorphic `dependsOn` relation
+// (type ∈ {candidate, resource}) — NOT by `createdBy` (that's the author).
+// Resolved from the natively-present included[] (no N+1).
+function consultantLabel(p: JsonApiResource, inc: Map<string, JsonApiResource>): string {
+  const dep = relRef(p, "dependsOn");
+  if (!dep) return "(non renseigné)";
+  const kind = dep.type === "resource" ? "ressource" : dep.type === "candidate" ? "candidat" : dep.type;
+  const e = inc.get(`${dep.type}:${dep.id}`);
+  if (e) {
+    const a = asAttrs(e);
+    const name = [a["firstName"], a["lastName"]].filter(Boolean).join(" ").trim();
+    if (name) return `${name} (${kind})`;
+  }
+  return `${dep.type} #${dep.id} (${kind})`;
+}
+
+const APPLICATION_STATE_LABEL = "00 - Candidature annonce";
+
+export async function formatPositioningsList(
+  response: JsonApiResponse,
+  opts: { excludeApplications?: boolean } = {}
+): Promise<string> {
+  const all = Array.isArray(response.data) ? response.data : response.data ? [response.data] : [];
+  if (all.length === 0) return "Aucun positionnement trouvé.";
 
   let stateById: Map<number, string> | undefined;
   try {
@@ -72,19 +93,26 @@ export async function formatPositioningsList(response: JsonApiResponse): Promise
   }
   const inc = indexIncluded(response);
 
-  const lines = data.map((p) => {
+  let hidden = 0;
+  const lines: string[] = [];
+  for (const p of all) {
     const a = asAttrs(p);
-    const who = displayEntity(relRef(p, "candidate") ?? relRef(p, "resource"), inc);
+    const stateNum = Number(a["state"]);
+    const stateLabel = Number.isFinite(stateNum) ? (stateById?.get(stateNum) ?? `état ${stateNum}`) : null;
+
+    // Filter out "Candidature annonce" noise on the resolved label (not the prefix).
+    if (opts.excludeApplications && stateLabel && stateLabel.trim() === APPLICATION_STATE_LABEL) {
+      hidden++;
+      continue;
+    }
+
     const what = displayEntity(relRef(p, "project") ?? relRef(p, "opportunity"), inc);
 
     const parts: string[] = [`[positioning #${p.id}]`];
-    // Combine the two linked entities into one segment so the "→" only ever
-    // sits between them — avoids a stray "· →" when one side is missing.
-    const link = [who, what].filter(Boolean).join(" → ");
-    if (link) parts.push(link);
-
-    const stateNum = Number(a["state"]);
-    if (Number.isFinite(stateNum)) parts.push(stateById?.get(stateNum) ?? `état ${stateNum}`);
+    if (what) parts.push(what);
+    // Consultant segment inserted right after the opportunity/project segment.
+    parts.push(`Consultant: ${consultantLabel(p, inc)}`);
+    if (stateLabel) parts.push(stateLabel);
 
     const start = typeof a["startDate"] === "string" && a["startDate"] ? (a["startDate"] as string) : null;
     const end = typeof a["endDate"] === "string" && a["endDate"] ? (a["endDate"] as string) : null;
@@ -95,11 +123,15 @@ export async function formatPositioningsList(response: JsonApiResponse): Promise
     if (created) parts.push(`créé ${created}`);
     if (updated) parts.push(`MàJ ${updated}`);
 
-    return parts.join(" · ");
-  });
+    lines.push(parts.join(" · "));
+  }
 
   const total = (response as { meta?: { totals?: { rows?: number } } }).meta?.totals?.rows;
-  const header = total !== undefined ? `Total: ${total} positionnement(s)` : `${data.length} positionnement(s)`;
+  let header = total !== undefined ? `Total: ${total} positionnement(s)` : `${all.length} positionnement(s)`;
+  if (hidden > 0) header += ` · ${hidden} masqué(s) (${APPLICATION_STATE_LABEL})`;
+  if (lines.length === 0) {
+    return `${header}\n(aucun positionnement à afficher après filtrage de cette page)`;
+  }
   return [header, ...lines].join("\n");
 }
 
@@ -114,9 +146,10 @@ export function registerPositioningTools(server: McpServer): void {
 Args:
   - keywords (string, optional): Termes de recherche
   - candidateId, resourceId, projectId, opportunityId (string, optional): Filtrer par entité liée
+  - excludeApplications (boolean, optional, défaut false): masque les positionnements à l'état « 00 - Candidature annonce »
   - page, pageSize: Pagination
 
-Returns: Une ligne par positionnement avec entité(s) liée(s), état (libellé), période, et **date de création + date de mise à jour**.`,
+Returns: Une ligne par positionnement avec **consultant** (Prénom NOM, candidat ou ressource), opportunité/projet, état (libellé), période, et **date de création + date de mise à jour**.`,
       inputSchema: PositioningSearchSchema,
       annotations: {
         readOnlyHint: true,
@@ -126,11 +159,14 @@ Returns: Une ligne par positionnement avec entité(s) liée(s), état (libellé)
       },
     },
     async (params) => {
-      const query = buildSearchQuery(params);
+      // excludeApplications est un filtre côté serveur MCP (sur le libellé résolu),
+      // pas un paramètre d'API → l'exclure de la query Boondmanager.
+      const { excludeApplications, ...searchParams } = params;
+      const query = buildSearchQuery(searchParams);
       query["include"] = POSITIONING_INCLUDE;
       const response = await apiRequest("/positionings", "GET", undefined, query);
       return {
-        content: [{ type: "text" as const, text: await formatPositioningsList(response) }],
+        content: [{ type: "text" as const, text: await formatPositioningsList(response, { excludeApplications }) }],
       };
     }
   );

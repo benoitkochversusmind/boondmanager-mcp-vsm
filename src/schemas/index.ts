@@ -1243,6 +1243,13 @@ export const PositioningSearchSchema = z
     resourceId: z.string().optional().describe("Filtrer par ID ressource"),
     projectId: z.string().optional().describe("Filtrer par ID projet"),
     opportunityId: z.string().optional().describe("Filtrer par ID opportunité"),
+    excludeApplications: z
+      .boolean()
+      .optional()
+      .describe(
+        "Si true (défaut: false), masque les positionnements à l'état « 00 - Candidature annonce » " +
+          "(bruit des candidatures sur annonce). Filtrage sur le libellé d'état résolu, après récupération de la page."
+      ),
     page: z.number().int().min(1).max(MAX_SEARCH_PAGE).default(1).describe(`Numéro de page (max: ${MAX_SEARCH_PAGE})`),
     pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).describe("Résultats par page"),
   })

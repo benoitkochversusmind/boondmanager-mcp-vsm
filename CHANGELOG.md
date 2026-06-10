@@ -3,6 +3,23 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.14.0] - 2026-06-09
+
+`boond_positionings_search` affiche désormais le **nom du consultant** sur chaque ligne, et peut **masquer le bruit des candidatures sur annonce**.
+
+### Ajouté
+
+- **Nom du consultant sur chaque positionnement** (`formatPositioningsList`, `src/tools/positionings.ts`). Le consultant est porté par la relation polymorphe `dependsOn` (`type ∈ {candidate, resource}` — candidat externe vs collaborateur interne) — et **non** par `createdBy` (qui est l'auteur). Nouveau segment `· Consultant: Prénom NOM (candidat|ressource)` inséré juste après le segment opportunité/projet ; `· Consultant: (non renseigné)` si `dependsOn` est absent. Ajout purement additif — aucun segment existant supprimé ni réordonné (compatibilité avec le skill daily-synthesis préservée).
+- **Paramètre `excludeApplications`** (boolean, défaut `false`) sur `boond_positionings_search` : quand `true`, masque les positionnements dont le **libellé d'état résolu** vaut « 00 - Candidature annonce » (matching sur le libellé, pas sur le préfixe). L'en-tête indique le nombre masqué. Filtre côté serveur MCP (exclu de la query Boondmanager).
+
+### Choix d'implémentation (preuve empirique)
+
+Résolution du consultant **sans aucun appel N+1** : la réponse LISTE de `/positionings` porte **nativement** un bloc `included[]` (présent même sans paramètre `include` — vérifié en prod : `include` ne change pas son contenu) contenant les `candidate`/`resource` liés avec `firstName`/`lastName`. On construit donc un index `(type:id) → "Prénom NOM"` depuis `included[]` (option a du brief). Coût réseau : 1 appel par page, quelle que soit la taille (jusqu'à 500). Cas de test confirmés : #14549 → `dependsOn=candidate 34592` = David TA (candidat) ; #14914 → `dependsOn=resource 17537` = Alexis LIAUD (ressource).
+
+### Tests
+
+- **+3 tests** `formatPositioningsList` (`positionings.test.ts`) : consultant candidat résolu depuis `included` ; consultant ressource avec fallback ID + libellé `(ressource)` ; `(non renseigné)` si `dependsOn` absent ; filtre `excludeApplications` (masque « 00 - Candidature annonce », conserve le reste, compte les masqués). **592 tests passants** (vs 590 en 1.13.2).
+
 ## [1.13.2] - 2026-06-09
 
 Cosmétique : dans `formatPositioningsList`, les deux entités liées sont fusionnées en un seul segment `candidat/ressource → projet/opportunité`, de sorte que la flèche `→` n'apparaît qu'entre deux entités. Évite le séparateur orphelin `· →` quand un positionnement n'a pas de candidat/ressource résolu (cas « candidature annonce » lié à une opportunité seule). Aucun changement de comportement par ailleurs. 590 tests.

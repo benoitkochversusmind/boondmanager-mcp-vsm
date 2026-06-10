@@ -59,63 +59,107 @@ describe("formatPositioningsList", () => {
     return { id, type: "positioning", attributes: attrs, relationships: rels };
   }
 
-  it("surfaces creationDate and updateDate (the core gap), state label, period and linked entities", async () => {
+  it("surfaces the consultant (dependsOn=candidate), dates, state label, period and opportunity", async () => {
     vi.spyOn(dictionary, "getStateMap").mockResolvedValue({
-      byId: new Map([[2, "Proposé"]]),
+      byId: new Map([[6, "04 - Sélectionné par le DO"]]),
       byLabel: new Map(),
     } as never);
 
     const response = {
       data: [
         positioning(
-          "14935",
+          "14549",
           {
-            creationDate: "2026-06-09T18:53:13+0200",
-            updateDate: "2026-06-10T09:00:00+0200",
-            state: 2,
+            creationDate: "2026-05-26T15:45:00+0200",
+            updateDate: "2026-06-08T17:02:00+0200",
+            state: 6,
             startDate: "2026-07-01",
             endDate: "2026-09-30",
           },
           {
-            candidate: { data: { id: "42893", type: "candidate" } },
-            opportunity: { data: { id: "585", type: "opportunity" } },
+            dependsOn: { data: { id: "34592", type: "candidate" } },
+            opportunity: { data: { id: "4370", type: "opportunity" } },
           }
         ),
       ],
       included: [
-        { id: "42893", type: "candidate", attributes: { firstName: "Jean", lastName: "Dupont" } },
-        { id: "585", type: "opportunity", attributes: { title: "Mission Data" } },
+        { id: "34592", type: "candidate", attributes: { firstName: "David", lastName: "TA" } },
+        { id: "4370", type: "opportunity", attributes: { title: "Dev JAVA" } },
       ],
       meta: { totals: { rows: 1 } },
     };
 
     const text = await formatPositioningsList(response as never);
     expect(text).toContain("Total: 1 positionnement(s)");
-    expect(text).toContain("[positioning #14935]");
-    expect(text).toContain("Jean Dupont (candidate #42893)");
-    expect(text).toContain("→ Mission Data (opportunity #585)");
-    expect(text).toContain("Proposé"); // state label resolved
-    expect(text).toContain("2026-07-01 → 2026-09-30"); // period
-    expect(text).toContain("créé 2026-06-09 18:53"); // creationDate
-    expect(text).toContain("MàJ 2026-06-10 09:00"); // updateDate
+    expect(text).toContain("[positioning #14549]");
+    expect(text).toContain("Dev JAVA (opportunity #4370)");
+    expect(text).toContain("Consultant: David TA (candidat)"); // dependsOn resolved from included
+    expect(text).toContain("04 - Sélectionné par le DO"); // state label
+    expect(text).toContain("2026-07-01 → 2026-09-30");
+    expect(text).toContain("créé 2026-05-26 15:45");
+    expect(text).toContain("MàJ 2026-06-08 17:02");
   });
 
-  it("falls back to numeric state and IDs when dictionary is down and included is absent", async () => {
-    vi.spyOn(dictionary, "getStateMap").mockRejectedValue(new Error("dict down"));
+  it("labels a resource consultant as (ressource), even without included (fallback to id)", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({ byId: new Map(), byLabel: new Map() } as never);
     const response = {
       data: [
         positioning(
-          "1",
-          { creationDate: "2026-01-02T08:00:00+0100", updateDate: "2026-01-02T08:00:00+0100", state: 7 },
-          { resource: { data: { id: "20", type: "resource" } } }
+          "14914",
+          { creationDate: "2026-01-02T08:00:00+0100", updateDate: "2026-01-02T08:00:00+0100", state: 2 },
+          { dependsOn: { data: { id: "17537", type: "resource" } } }
         ),
       ],
     };
     const text = await formatPositioningsList(response as never);
-    expect(text).toContain("[positioning #1]");
-    expect(text).toContain("resource #20"); // fallback to id (no included)
-    expect(text).toContain("état 7"); // numeric fallback
-    expect(text).toContain("créé 2026-01-02 08:00");
+    expect(text).toContain("[positioning #14914]");
+    expect(text).toContain("Consultant: resource #17537 (ressource)"); // fallback to id, kind=ressource
+    expect(text).toContain("état 2"); // numeric fallback when label missing
+  });
+
+  it("shows '(non renseigné)' when dependsOn is absent", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({ byId: new Map(), byLabel: new Map() } as never);
+    const response = { data: [positioning("9", { creationDate: "2026-01-01T00:00:00+0100" }, {})] };
+    const text = await formatPositioningsList(response as never);
+    expect(text).toContain("Consultant: (non renseigné)");
+  });
+
+  it("filters out '00 - Candidature annonce' when excludeApplications is true", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({
+      byId: new Map([
+        [2, "00 - Candidature annonce"],
+        [6, "04 - Sélectionné par le DO"],
+      ]),
+      byLabel: new Map(),
+    } as never);
+    const response = {
+      data: [
+        positioning(
+          "100",
+          { state: 2, creationDate: "2026-06-01T10:00:00+0200" },
+          {
+            dependsOn: { data: { id: "1", type: "candidate" } },
+          }
+        ),
+        positioning(
+          "101",
+          { state: 6, creationDate: "2026-06-02T10:00:00+0200" },
+          {
+            dependsOn: { data: { id: "2", type: "resource" } },
+          }
+        ),
+      ],
+      meta: { totals: { rows: 2 } },
+    };
+
+    const kept = await formatPositioningsList(response as never, { excludeApplications: true });
+    expect(kept).not.toContain("[positioning #100]"); // candidature annonce hidden
+    expect(kept).toContain("[positioning #101]");
+    expect(kept).toContain("1 masqué(s)");
+
+    const all = await formatPositioningsList(response as never); // default: nothing hidden
+    expect(all).toContain("[positioning #100]");
+    expect(all).toContain("[positioning #101]");
   });
 
   it("returns a clear message for an empty result", async () => {

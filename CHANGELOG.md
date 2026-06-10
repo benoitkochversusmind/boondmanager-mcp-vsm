@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.17.1] - 2026-06-10
+
+### Corrigé
+
+- **`boond_candidates_documents` / `boond_resources_documents` renvoyaient vide** alors que l'entité possède des CV. La relation **`resumes`** (les CV) est portée par la sous-ressource **`/information`**, pas par le `GET /{entity}/{id}` nu — la lecture base-seule ne la voyait pas (vérifié en prod : candidat 2123 et ressource 113 ont leurs `resumes` uniquement sur `/information`). Le listing utilise désormais **`fetchEntityWithInformation()`** (fetch fusionné base ∪ `/information`, identique à `boond_*_get`). Pour les actions, `/information` n'existe pas → repli non-fatal sur le base (qui porte bien `files`). `boond_documents_get` est inchangé (fonctionnait déjà).
+
 ## [1.17.0] - 2026-06-10
 
 Ajoute la **lecture du contenu et le téléchargement des pièces jointes PDF** (candidats, ressources, actions).

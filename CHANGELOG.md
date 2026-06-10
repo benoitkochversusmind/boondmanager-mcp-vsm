@@ -3,6 +3,32 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.16.0] - 2026-06-10
+
+Ajoute l'**écriture du Dossier Technique candidat** (`boond_candidates_technical_data_update`), validée en production, et fiabilise le déploiement.
+
+### Ajouté
+
+- **`boond_candidates_technical_data_update`** — met à jour le Dossier Technique d'un candidat (outils, domaines, secteurs, compétences, expérience, langues) en *read-modify-write* puis `PUT /technical-datas/{tdId}`. Le serveur expose désormais **173 outils**.
+  - **Résolution libellé→id** insensible casse/accents contre les dictionnaires (`setting.tool` / `setting.activityArea` / `setting.expertiseArea` / `setting.experience` / `setting.languageSpoken` / `setting.languageLevel`). Tout libellé/niveau non résolu = **erreur bloquante, sans écriture partielle**.
+  - **`tools`** : format `"<outil>"` ou `"<outil>|<niveau>"` (niveau entier 0–5, défaut 0 = non évalué), sérialisé `[{tool, level}]`. Le libellé doit matcher la *value* exacte du dictionnaire (« .Net: C# » ou id « csharp », pas « C# »).
+  - **`activityAreas`** / **`expertiseAreas`** : tableaux d'ids à plat ; `expertiseAreas` **restreint au jeu codifié S1–S12**.
+  - **`languages`** : format `"<langue>|<niveau CEFR>"` (A1–C2), sérialisé `[{language, level}]` en id canonique. En *merge*, le niveau d'une langue déjà présente est écrasé.
+  - **`mode`** : `merge` (défaut, union dédupliquée par outil/langue) ou `replace` (remplace les seuls champs fournis).
+
+### Corrigé
+
+- **Forme du payload `tools`** — l'API attend `[{tool:<id>, level:<int>}]` (stockage `tool|level`) ; un id à plat était rejeté par un `1017 Missing required attribute` sur `/tools/0/tool`.
+- **Hint d'erreur trompeur** (`formatApiError`, `src/services/boond-client.ts`) — sur une erreur de champ structurée (ex. `1017` avec pointeur de paramètre), le hint générique « typically wrong credentials / password mismatch » n'est plus ajouté (il orientait le diagnostic à tort). Conservé pour les 422 opaques (vrai cas d'auth) et les 429/5xx transitoires.
+
+### CI/CD
+
+- **`docker-build.yml`** — le job `deploy-to-aca` peut désormais être déclenché manuellement (`workflow_dispatch`, toujours borné à `main`), pour re-piloter un déploiement après un build *flaky* (ex. GHCR « unknown blob » à l'export de couche) sans commit vide.
+
+### Tests
+
+- Couverture Vitest étendue (formes par champ, niveaux outil/langue, merge/replace, garde-fous bloquants, suppression du hint trompeur) ; suite à **631 tests**.
+
 ## [1.15.0] - 2026-06-10
 
 Corrige la **création** de positionnements (cassée) et ajoute la **modification**.

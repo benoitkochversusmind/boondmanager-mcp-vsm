@@ -20,6 +20,12 @@ export const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
 // Past this cap the tool refuses and points to the out-of-band upload endpoint
 // or fileUrl. 1 Mo of base64 ≈ 1_048_576 chars.
 export const MAX_DOCUMENT_BASE64_CHARS = 1_048_576;
+// Cap on the "return the PDF to the model" fallback of boond_documents_get: a
+// scanned/non-extractable PDF is sent back as a base64 embedded resource so
+// Claude can read it. Bounded to keep the tool result (and the model context)
+// reasonable — beyond this, the tool points to the out-of-band download
+// endpoint instead. 6 Mo of binary ≈ 8 Mo of base64.
+export const MAX_DOCUMENT_INLINE_READ_BYTES = 6 * 1024 * 1024;
 
 // HTTP client defaults
 // Timeout applied to every BoondManager API request. Overridable via

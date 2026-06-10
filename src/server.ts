@@ -42,6 +42,7 @@ import {
   registerPlanningAbsenceTools,
   registerWorkflowTools,
   registerDocumentTools,
+  registerDocumentReadTools,
 } from "./tools/index.js";
 import { registerAllPrompts } from "./prompts/index.js";
 import { registerAllResources } from "./resources/index.js";
@@ -157,6 +158,7 @@ export function createMcpServer(): McpServer {
   registerPlanningAbsenceTools(server);
   registerWorkflowTools(server);
   registerDocumentTools(server);
+  registerDocumentReadTools(server);
 
   registerAllPrompts(server);
   registerAllResources(server);

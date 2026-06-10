@@ -12,6 +12,8 @@ import {
   apiRequest,
   parseBoondErrorBody,
   formatApiError,
+  parseContentDispositionFilename,
+  fetchDocument,
   resolveTimeoutMs,
   resolveRetryConfig,
   isRetryable,
@@ -748,6 +750,59 @@ describe("formatApiError", () => {
     expect(msg).not.toContain("the user lacks permission");
     // The HTML body itself isn't echoed.
     expect(msg).not.toContain("<html>");
+  });
+});
+
+describe("parseContentDispositionFilename", () => {
+  it('reads a plain filename="x"', () => {
+    expect(parseContentDispositionFilename('attachment; filename="cv-thomas.pdf"')).toBe("cv-thomas.pdf");
+  });
+  it("reads an unquoted filename", () => {
+    expect(parseContentDispositionFilename("attachment; filename=scan.pdf")).toBe("scan.pdf");
+  });
+  it("reads an RFC 5987 filename* (percent-encoded UTF-8)", () => {
+    expect(parseContentDispositionFilename("attachment; filename*=UTF-8''CV%20Andr%C3%A9.pdf")).toBe("CV André.pdf");
+  });
+  it("returns undefined when absent or empty", () => {
+    expect(parseContentDispositionFilename(null)).toBeUndefined();
+    expect(parseContentDispositionFilename("inline")).toBeUndefined();
+  });
+});
+
+describe("fetchDocument", () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    process.env.BOOND_API_TOKEN = "tok";
+    delete process.env.BOOND_BASE_URL;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    process.env = { ...originalEnv };
+  });
+
+  it("GETs /documents/{id} and returns buffer + filename + contentType", async () => {
+    const bytes = Buffer.from("%PDF-1.4 hello");
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(bytes, {
+          status: 200,
+          headers: { "content-type": "application/pdf", "content-disposition": 'attachment; filename="cv.pdf"' },
+        })
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const doc = await fetchDocument("1896_resume");
+    const calledUrl = String(fetchSpy.mock.calls[0][0]);
+    expect(calledUrl).toContain("/documents/1896_resume");
+    expect(doc.fileName).toBe("cv.pdf");
+    expect(doc.contentType).toBe("application/pdf");
+    expect(doc.buffer.equals(bytes)).toBe(true);
+  });
+
+  it("throws a formatted error on a non-2xx response", async () => {
+    globalThis.fetch = (async () => new Response("not found", { status: 404, statusText: "Not Found" })) as never;
+    await expect(fetchDocument("nope_resume")).rejects.toThrow(/404/);
   });
 });
 

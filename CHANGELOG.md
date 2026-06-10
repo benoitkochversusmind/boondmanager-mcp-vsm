@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.17.0] - 2026-06-10
+
+Ajoute la **lecture du contenu et le téléchargement des pièces jointes PDF** (candidats, ressources, actions).
+
+### Ajouté
+
+- **Lister les pièces jointes** : `boond_candidates_documents`, `boond_resources_documents`, `boond_actions_documents` — agrègent les relations `resumes` (CV → id `<n>_resume`) et `files` (pièces jointes → id `<n>_document`) de l'entité (les actions n'ont que `files`). Renvoient l'ID composite + la nature de chaque document. Le serveur expose désormais **177 outils**.
+- **Lire le contenu** : `boond_documents_get(documentId)` — stratégie **hybride** : si le PDF a une couche texte, renvoie le texte extrait (via `unpdf`, pdf.js sans dépendance native) ; sinon (PDF scanné/image) renvoie le PDF en ressource embarquée pour lecture directe par le modèle (plafond 6 Mo ; au-delà → renvoi vers le téléchargement). Fichier non-PDF : métadonnée + lien de téléchargement.
+- **Télécharger** : endpoint hors-bande `GET /documents/download?documentId=<id>` (auth Bearer, jusqu'à 15 Mo), symétrique de `POST /documents/upload` — le binaire ne transite pas par le LLM. Client `fetchDocument()` ajouté (`GET /documents/{id}` → flux binaire + nom via `Content-Disposition`).
+
+### Tests
+
+- Vitest : listing (agrégation resumes+files, action files-only, vide), lecture hybride (texte / PDF scanné en ressource / cap de taille / non-PDF / erreur), `parseContentDispositionFilename`, `fetchDocument` (happy path + 404). Suite à **646 tests**.
+
 ## [1.16.0] - 2026-06-10
 
 Ajoute l'**écriture du Dossier Technique candidat** (`boond_candidates_technical_data_update`), validée en production, et fiabilise le déploiement.

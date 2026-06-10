@@ -3,7 +3,7 @@
 > Auto-generated from the server registrations. Do not edit by hand.
 > Regenerate with `npm run docs:tools` (CI fails if this file is stale).
 
-**173 tools** across **38 domains** · **12 prompts** · **21 resources**.
+**177 tools** across **38 domains** · **12 prompts** · **21 resources**.
 
 Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destructiveHint), `idempotent` (idempotentHint), `open-world` (openWorldHint, e.g. paginated keyword search).
 
@@ -26,12 +26,13 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_accounts_get` | Détails d'un compte utilisateur | read · idempotent |
 | `boond_accounts_search` | Rechercher des comptes utilisateurs | read · idempotent · open-world |
 
-### actions (4)
+### actions (5)
 
 | Tool | Title | Hints |
 |---|---|---|
 | `boond_actions_create` | Créer une action | write |
 | `boond_actions_delete` | Supprimer une action | delete |
+| `boond_actions_documents` | Lister les pièces jointes d'une action | read · idempotent |
 | `boond_actions_get` | Détails d'une action | read · idempotent |
 | `boond_actions_search` | Rechercher des actions | read · idempotent · open-world |
 
@@ -70,7 +71,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_calendars_get` | Détails d'un calendrier | read · idempotent |
 | `boond_calendars_search` | Rechercher des calendriers | read · idempotent · open-world |
 
-### candidates (11)
+### candidates (12)
 
 | Tool | Title | Hints |
 |---|---|---|
@@ -78,6 +79,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_candidates_administrative` | Données administratives d'un candidat | read · idempotent |
 | `boond_candidates_create` | Créer un(e) candidat | write |
 | `boond_candidates_delete` | Supprimer un(e) candidat | delete |
+| `boond_candidates_documents` | Lister les pièces jointes d'un candidat | read · idempotent |
 | `boond_candidates_get` | Détails d'un(e) candidat | read · idempotent |
 | `boond_candidates_information` | Informations générales d'un candidat | read · idempotent |
 | `boond_candidates_positionings` | Positionnements d'un candidat | read · idempotent |
@@ -135,11 +137,12 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_deliveries_get` | Détails d'une livraison / CRA | read · idempotent |
 | `boond_deliveries_search` | Rechercher des livraisons / CRA | read · idempotent · open-world |
 
-### documents (1)
+### documents (2)
 
 | Tool | Title | Hints |
 |---|---|---|
 | `boond_documents_create` | Uploader une pièce jointe et la lier à une entité | write |
+| `boond_documents_get` | Lire le contenu d'une pièce jointe (PDF) | read · idempotent |
 
 ### expenses (5)
 
@@ -291,7 +294,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_reporting_resources` | Reporting ressources | read · idempotent · open-world |
 | `boond_reporting_synthesis` | Reporting synthèse | read · idempotent · open-world |
 
-### resources (17)
+### resources (18)
 
 | Tool | Title | Hints |
 |---|---|---|
@@ -301,6 +304,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_resources_advantages` | Avantages d'une ressource | read · idempotent |
 | `boond_resources_create` | Créer un(e) ressource | write |
 | `boond_resources_delete` | Supprimer un(e) ressource | delete |
+| `boond_resources_documents` | Lister les pièces jointes d'une ressource | read · idempotent |
 | `boond_resources_expenses_reports` | Notes de frais d'une ressource | read · idempotent |
 | `boond_resources_get` | Détails d'un(e) ressource | read · idempotent |
 | `boond_resources_information` | Informations générales d'une ressource | read · idempotent |

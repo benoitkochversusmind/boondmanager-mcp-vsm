@@ -21,8 +21,11 @@ import type { JsonApiResponse, JsonApiResource } from "../types.js";
 //   - setting.expertiseArea : restricted to the S1–S12 codified set (value matches /\[S\d+\]/) ;
 //                             historical non-S entries are rejected (not resolvable).
 //   - setting.experience    : flat list {id:number,value}.
-//   - DT arrays (tools/activityAreas/expertiseAreas) are arrays of plain string ids,
-//     but we detect the existing element shape and align to it ({id} objects vs strings).
+//   - PUT write shapes differ per DT field (TAB_DT storage + live GET reads):
+//       * tools          → `tool|level` pairs ⇒ array of { tool: <id> } objects
+//                          (a flat id is rejected with 1017 on /tools/0/tool).
+//       * activityAreas  → pipe-delimited ids ⇒ flat id array (as the GET returns).
+//       * expertiseAreas → pipe-delimited ids ⇒ flat id array (as the GET returns).
 
 const S_CODE_RE = /\[S\d+\]/;
 
@@ -89,15 +92,38 @@ function asArray(v: unknown): unknown[] {
 }
 
 /**
- * Merge (union, dedup) or replace a DT id-array, preserving the EXISTING element
- * shape: if the current array holds `{id}` objects, emit objects; otherwise emit
- * plain string ids. `newIds` are always string ids resolved from the dictionary.
+ * Extract the dictionary id from an existing DT array element, tolerating every
+ * shape BoondManager may return: a flat id string ("aws"), a typed-key object
+ * ({ tool: "aws" } / { activityArea: "x" } / { expertiseArea: "y" }, possibly
+ * nested as { tool: { id } }), or a generic { id } object.
  */
-function buildArray(existing: unknown[], newIds: string[], mode: "merge" | "replace"): unknown[] {
-  const objectShape = existing.length > 0 && typeof existing[0] === "object" && existing[0] !== null;
-  const existingIds = existing.map((e) => (objectShape ? String((e as { id?: unknown }).id) : String(e)));
+function existingId(el: unknown, wrapKey?: string): string {
+  if (el && typeof el === "object") {
+    const o = el as Record<string, unknown>;
+    if (wrapKey && o[wrapKey] !== undefined && o[wrapKey] !== null) {
+      const v = o[wrapKey];
+      return v !== null && typeof v === "object" ? String((v as { id?: unknown }).id) : String(v);
+    }
+    if (o["id"] !== undefined && o["id"] !== null) return String(o["id"]);
+  }
+  return String(el);
+}
+
+/**
+ * Merge (union, dedup) or replace a DT id-array, emitting the EXACT write shape
+ * BoondManager expects for that field (verified against the TAB_DT storage spec
+ * + live reads):
+ *   - `tools` are stored as `tool|level` pairs → each entry is an object keyed
+ *     by `tool` (`wrapKey = "tool"`); a flat id is rejected with 1017 on
+ *     `/tools/0/tool`.
+ *   - `activityAreas` / `expertiseAreas` are plain pipe-delimited ids → flat id
+ *     arrays (no wrapKey), matching exactly how the GET tab returns them.
+ * `newIds` are always string ids already resolved from the dictionary.
+ */
+function buildArray(existing: unknown[], newIds: string[], mode: "merge" | "replace", wrapKey?: string): unknown[] {
+  const existingIds = existing.map((e) => existingId(e, wrapKey));
   const finalIds = mode === "replace" ? [...newIds] : Array.from(new Set([...existingIds, ...newIds]));
-  return objectShape ? finalIds.map((id) => ({ id })) : finalIds;
+  return wrapKey ? finalIds.map((id) => ({ [wrapKey]: id })) : finalIds;
 }
 
 export interface TechnicalDataUpdateResult {
@@ -177,14 +203,17 @@ export async function updateCandidateTechnicalData(
   const attrs: Record<string, unknown> = {};
   const applied: string[] = [];
   if (input.tools) {
-    attrs["tools"] = buildArray(asArray(cur["tools"]), toolIds, mode);
+    // tools carry a level (stored `tool|level`) → array of { tool: <id> } objects.
+    attrs["tools"] = buildArray(asArray(cur["tools"]), toolIds, mode, "tool");
     applied.push(`tools (${(attrs["tools"] as unknown[]).length})`);
   }
   if (input.activityAreas) {
+    // Plain pipe-delimited ids → flat id array (matches the GET tab shape).
     attrs["activityAreas"] = buildArray(asArray(cur["activityAreas"]), activityIds, mode);
     applied.push(`activityAreas (${(attrs["activityAreas"] as unknown[]).length})`);
   }
   if (input.expertiseAreas) {
+    // Plain pipe-delimited ids → flat id array (matches the GET tab shape).
     attrs["expertiseAreas"] = buildArray(asArray(cur["expertiseAreas"]), expertiseIds, mode);
     applied.push(`expertiseAreas (${(attrs["expertiseAreas"] as unknown[]).length})`);
   }

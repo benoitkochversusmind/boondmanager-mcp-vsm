@@ -686,9 +686,37 @@ describe("formatApiError", () => {
     const msg = formatApiError(422, "Unprocessable Entity", "GET", "/resources", body);
     expect(msg).toContain("BoondManager API 422 Unprocessable Entity: 422 - password mismatch");
     expect(msg).toContain("Endpoint: GET /resources");
-    expect(msg).toContain("Hint:");
     // raw body must not be repeated when we have a structured detail
     expect(msg).not.toContain(body);
+    // A structured 422 detail is self-explanatory: the generic credentials hint
+    // is suppressed so it can't mislead the diagnosis.
+    expect(msg).not.toContain("Hint:");
+  });
+
+  it("suppresses the misleading credentials hint on a 422 field error (1017)", () => {
+    const body = JSON.stringify({
+      errors: [
+        { code: "1017", title: "Missing required attribute", source: { pointer: "/data/attributes/tools/0/tool" } },
+      ],
+    });
+    const msg = formatApiError(422, "Unprocessable Entity", "PUT", "/technical-datas/29489", body);
+    expect(msg).toContain("Missing required attribute");
+    expect(msg).toContain("/data/attributes/tools/0/tool"); // the offending field is surfaced
+    expect(msg).not.toContain("password mismatch");
+    expect(msg).not.toContain("wrong credentials");
+    expect(msg).not.toContain("Hint:");
+  });
+
+  it("still emits the credentials hint on an opaque 422 (no structured detail)", () => {
+    const msg = formatApiError(422, "Unprocessable Entity", "GET", "/resources", "");
+    expect(msg).toContain("Hint:");
+    expect(msg).toContain("wrong credentials");
+  });
+
+  it("keeps the hint on a 5xx even when a detail is present", () => {
+    const body = JSON.stringify({ errors: [{ detail: "internal blew up" }] });
+    const msg = formatApiError(500, "Server Error", "GET", "/resources", body);
+    expect(msg).toContain("BoondManager-side error"); // transient hint stays useful
   });
 
   it("falls back to a (truncated) raw body when JSON parsing fails", () => {

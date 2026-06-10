@@ -386,7 +386,14 @@ export function formatApiError(status: number, statusText: string, method: strin
         "This often means the endpoint is restricted on this tenant, or you've made too many calls in a short window. " +
         "Wait a few seconds and retry; if it persists, the endpoint is not enabled for this account."
     );
-  } else {
+  } else if (!detail || status === 429 || status >= 500) {
+    // When the API returned a structured field error (e.g. JSON:API 1017
+    // "Missing required attribute" with a `source.parameter` pointer), the
+    // parsed `detail` already pinpoints the offending field — appending the
+    // generic status hint (notably the 422 "typically wrong credentials /
+    // password mismatch" line) would send the diagnosis in the wrong
+    // direction. We therefore keep the hint only for opaque errors (no
+    // structured detail) and for transient 429/5xx where it stays useful.
     lines.push(`Hint: ${hintForStatus(status)}`);
   }
   return lines.join("\n");

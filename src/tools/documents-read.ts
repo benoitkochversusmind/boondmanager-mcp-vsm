@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { IdSchema, DocumentGetSchema } from "../schemas/index.js";
 import type { DocumentGetInput } from "../schemas/index.js";
-import { apiRequest, fetchDocument } from "../services/boond-client.js";
+import { fetchEntityWithInformation, fetchDocument } from "../services/boond-client.js";
 import { extractPdfText } from "../services/pdf.js";
 import { MAX_DOCUMENT_INLINE_READ_BYTES } from "../constants.js";
 import type { JsonApiResource } from "../types.js";
@@ -12,6 +12,12 @@ import type { JsonApiResource } from "../types.js";
 // the parent entity (verified live), NOT a `/documents` tab (which 404s):
 //   - relationships.resumes → CVs        (composite id `<n>_resume`)
 //   - relationships.files   → attachments (composite id `<n>_document`)
+// IMPORTANT: for candidates & resources, `resumes` is carried by the
+// `/information` sub-resource, NOT the bare `GET /{entity}/{id}` — so we read
+// via fetchEntityWithInformation() (base ∪ /information, the same merged fetch
+// as boond_candidates_get). Actions carry `files` on the base and have no
+// /information (404 → non-fatal fallback to base). A base-only read returned
+// empty for candidates with CVs (the bug this fixes).
 // The binary is fetched via GET /documents/{compositeId} (see fetchDocument).
 
 /** Human label for a document, derived from its composite-id suffix. */
@@ -48,7 +54,9 @@ function collectDocs(entity: JsonApiResource | undefined, rels: string[]): DocRe
 }
 
 async function listDocuments(apiPath: string, id: string, rels: string[], entityLabel: string): Promise<string> {
-  const resp = await apiRequest(`${apiPath}/${id}`, "GET");
+  // Merged base ∪ /information fetch — `resumes` lives on /information for
+  // candidates & resources (non-fatal fallback to base for actions).
+  const resp = await fetchEntityWithInformation(`${apiPath}/${id}`);
   const entity = (Array.isArray(resp.data) ? resp.data[0] : resp.data) as JsonApiResource | undefined;
   const docs = collectDocs(entity, rels);
   if (docs.length === 0) {

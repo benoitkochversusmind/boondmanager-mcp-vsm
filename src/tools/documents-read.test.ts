@@ -42,8 +42,10 @@ describe("registerDocumentReadTools", () => {
 describe("list documents", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("candidate: aggregates resumes (CV) + files (pièce jointe) with their composite ids", async () => {
-    const api = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
+  it("candidate: reads the MERGED base+/information fetch and aggregates resumes (CV) + files", async () => {
+    // Regression: `resumes` is carried by /information, so the merged fetch is
+    // required — a bare GET /candidates/{id} returns no resumes (the bug).
+    const merged = vi.spyOn(boondClient, "fetchEntityWithInformation").mockResolvedValue({
       data: {
         id: "2123",
         type: "candidate",
@@ -60,24 +62,24 @@ describe("list documents", () => {
     } as never);
 
     const text = (await handlerFor("boond_candidates_documents")({ id: "2123" })).content[0].text!;
-    expect(api).toHaveBeenCalledWith("/candidates/2123", "GET");
+    expect(merged).toHaveBeenCalledWith("/candidates/2123");
     expect(text).toContain("3 pièce(s) jointe(s)");
     expect(text).toContain("1896_resume (CV)");
     expect(text).toContain("10756_resume (CV)");
     expect(text).toContain("55_document (pièce jointe)");
   });
 
-  it("action: reads only the files relationship", async () => {
-    const api = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
+  it("action: reads only the files relationship (merged fetch falls back to base)", async () => {
+    const merged = vi.spyOn(boondClient, "fetchEntityWithInformation").mockResolvedValue({
       data: { id: "12345", type: "action", relationships: { files: { data: [{ id: "9_document" }] } } },
     } as never);
     const text = (await handlerFor("boond_actions_documents")({ id: "12345" })).content[0].text!;
-    expect(api).toHaveBeenCalledWith("/actions/12345", "GET");
+    expect(merged).toHaveBeenCalledWith("/actions/12345");
     expect(text).toContain("9_document (pièce jointe)");
   });
 
-  it("returns a clear message when there is no attachment", async () => {
-    vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
+  it("returns a clear message (not an error) when there is no attachment", async () => {
+    vi.spyOn(boondClient, "fetchEntityWithInformation").mockResolvedValue({
       data: { id: "7", type: "resource", relationships: {} },
     } as never);
     const text = (await handlerFor("boond_resources_documents")({ id: "7" })).content[0].text!;

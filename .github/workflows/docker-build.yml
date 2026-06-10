@@ -46,7 +46,9 @@ jobs:
 
   deploy-to-aca:
     needs: build-and-push
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Deploy on push to main, and on manual workflow_dispatch (so a stuck/flaky
+    # build can be re-driven to deployment without an empty commit).
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       id-token: write

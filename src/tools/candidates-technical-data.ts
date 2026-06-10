@@ -22,10 +22,11 @@ import type { JsonApiResponse, JsonApiResource } from "../types.js";
 //                             historical non-S entries are rejected (not resolvable).
 //   - setting.experience    : flat list {id:number,value}.
 //   - PUT write shapes differ per DT field (TAB_DT storage + live GET reads):
-//       * tools          → `tool|level` pairs ⇒ array of { tool: <id> } objects
-//                          (a flat id is rejected with 1017 on /tools/0/tool).
+//       * tools          → `tool|level` pairs ⇒ array of { tool: <id>, level: <int 0-5> }
+//                          (a flat id is rejected with 1017 on /tools/0/tool; level 0 = non évalué).
 //       * activityAreas  → pipe-delimited ids ⇒ flat id array (as the GET returns).
 //       * expertiseAreas → pipe-delimited ids ⇒ flat id array (as the GET returns).
+//       * languages      → array of { language: <setting.languageSpoken id>, level: <setting.languageLevel CEFR id> }.
 
 const S_CODE_RE = /\[S\d+\]/;
 
@@ -126,6 +127,68 @@ function buildArray(existing: unknown[], newIds: string[], mode: "merge" | "repl
   return wrapKey ? finalIds.map((id) => ({ [wrapKey]: id })) : finalIds;
 }
 
+/** Split a `"<label>|<level>"` entry into its label and optional level suffix (split on the LAST `|`). */
+function splitLevel(raw: string): { label: string; level?: string } {
+  const i = raw.lastIndexOf("|");
+  if (i < 0) return { label: raw.trim() };
+  return { label: raw.slice(0, i).trim(), level: raw.slice(i + 1).trim() };
+}
+
+// `type` (not `interface`) so these satisfy the Record<string, unknown> constraint
+// of mergeKeyed — interfaces can be augmented, so TS won't treat them as such.
+type ToolWrite = { tool: string; level: number };
+type LanguageWrite = { language: string; level: string };
+
+/** Coerce an existing DT tools element ({tool,level} | {id} | flat id) to the writable shape. */
+function normExistingTool(el: unknown): ToolWrite | null {
+  const id = existingId(el, "tool");
+  if (!id || id === "undefined" || id === "null") return null;
+  let level = 0;
+  if (el && typeof el === "object") {
+    const n = Number((el as Record<string, unknown>)["level"]);
+    if (Number.isInteger(n) && n >= 0 && n <= 5) level = n;
+  }
+  return { tool: id, level };
+}
+
+/** Coerce an existing DT languages element ({language,level} | flat "lang|level") to the writable shape. */
+function normExistingLanguage(el: unknown): LanguageWrite | null {
+  if (el && typeof el === "object") {
+    const o = el as Record<string, unknown>;
+    const language = o["language"] !== undefined ? String(o["language"]) : o["id"] !== undefined ? String(o["id"]) : "";
+    if (!language) return null;
+    return { language, level: o["level"] !== undefined && o["level"] !== null ? String(o["level"]) : "" };
+  }
+  const s = String(el ?? "");
+  if (!s) return null;
+  const i = s.indexOf("|");
+  return i >= 0 ? { language: s.slice(0, i), level: s.slice(i + 1) } : { language: s, level: "" };
+}
+
+/**
+ * Merge/replace a keyed object-array (tools keyed by `tool`, languages by
+ * `language`): fresh entries win on key conflicts; in merge mode, existing
+ * entries (read from the DT, then normalized to the writable shape) are kept
+ * unless overridden. Dedups by key.
+ */
+function mergeKeyed<T extends Record<string, unknown>>(
+  existing: unknown[],
+  fresh: T[],
+  keyField: keyof T & string,
+  norm: (el: unknown) => T | null,
+  mode: "merge" | "replace"
+): T[] {
+  const map = new Map<string, T>();
+  if (mode === "merge") {
+    for (const el of existing) {
+      const n = norm(el);
+      if (n) map.set(String(n[keyField]), n);
+    }
+  }
+  for (const f of fresh) map.set(String(f[keyField]), f);
+  return [...map.values()];
+}
+
 export interface TechnicalDataUpdateResult {
   response: JsonApiResponse;
   tdId: string;
@@ -154,35 +217,72 @@ export async function updateCandidateTechnicalData(
   const experienceResolver = buildResolver(
     asArray(resolveDictionaryPath(dict.payload, "setting.experience")) as DictEntry[]
   );
+  const languageResolver = buildResolver(
+    asArray(resolveDictionaryPath(dict.payload, "setting.languageSpoken")) as DictEntry[]
+  );
+  const languageLevelResolver = buildResolver(
+    asArray(resolveDictionaryPath(dict.payload, "setting.languageLevel")) as DictEntry[]
+  );
 
-  // 2. Resolve every provided label; collect unresolved per field (no silent drop).
-  const unresolved: string[] = [];
+  // 2. Resolve every provided label; collect rejected entries (no silent drop,
+  //    no partial write — a single rejection blocks the whole call).
+  const rejected: string[] = [];
   function resolveAll(labels: string[] | undefined, resolver: Resolver, field: string): string[] {
     if (!labels) return [];
     const ids: string[] = [];
     for (const label of labels) {
       const id = resolver.resolve(label);
-      if (id === undefined) unresolved.push(`${field}: "${label}"`);
+      if (id === undefined) rejected.push(`${field}: "${label}"`);
       else ids.push(String(id));
     }
     return ids;
   }
-  const toolIds = resolveAll(input.tools, toolResolver, "tools");
   const activityIds = resolveAll(input.activityAreas, activityResolver, "activityAreas");
   const expertiseIds = resolveAll(input.expertiseAreas, expertiseResolver, "expertiseAreas");
+
+  // tools: "<outil>" or "<outil>|<niveau 0-5>" → { tool: <id>, level: <int, défaut 0> }.
+  const toolEntries: ToolWrite[] = [];
+  for (const raw of input.tools ?? []) {
+    const { label, level } = splitLevel(raw);
+    const id = toolResolver.resolve(label);
+    if (id === undefined) rejected.push(`tools: "${label}"`);
+    let lvl = 0;
+    if (level !== undefined && level !== "") {
+      const n = Number(level);
+      if (!Number.isInteger(n) || n < 0 || n > 5) rejected.push(`tools (niveau): "${raw}" (entier 0–5 attendu)`);
+      else lvl = n;
+    }
+    if (id !== undefined) toolEntries.push({ tool: String(id), level: lvl });
+  }
+
+  // languages: "<langue>|<niveau CEFR>" → { language: <id>, level: <CEFR id|""> }.
+  const languageEntries: LanguageWrite[] = [];
+  for (const raw of input.languages ?? []) {
+    const { label, level } = splitLevel(raw);
+    const langId = languageResolver.resolve(label);
+    if (langId === undefined) rejected.push(`languages: "${label}"`);
+    let levelId = "";
+    if (level !== undefined && level !== "") {
+      const lv = languageLevelResolver.resolve(level);
+      if (lv === undefined) rejected.push(`languages (niveau CEFR A1–C2): "${level}"`);
+      else levelId = String(lv);
+    }
+    if (langId !== undefined) languageEntries.push({ language: String(langId), level: levelId });
+  }
 
   let experienceId: number | undefined;
   if (input.experience !== undefined) {
     const r = experienceResolver.resolve(input.experience);
-    if (r === undefined) unresolved.push(`experience: "${input.experience}"`);
+    if (r === undefined) rejected.push(`experience: "${input.experience}"`);
     else experienceId = Number(r);
   }
 
-  if (unresolved.length > 0) {
+  if (rejected.length > 0) {
     throw new Error(
-      `Libellé(s) non résolu(s) — aucune écriture effectuée. Vérifiez l'orthographe ou utilisez ` +
-        `boond_application_dictionary (setting.tool / setting.activityArea / setting.expertiseArea — ` +
-        `secteurs restreints à S1–S12 / setting.experience).\n  - ${unresolved.join("\n  - ")}`
+      `Entrée(s) non résolue(s) ou invalide(s) — aucune écriture effectuée. Vérifiez l'orthographe ou utilisez ` +
+        `boond_application_dictionary (setting.tool / setting.activityArea / setting.expertiseArea — secteurs ` +
+        `restreints à S1–S12 / setting.experience / setting.languageSpoken / setting.languageLevel).\n  - ` +
+        `${rejected.join("\n  - ")}`
     );
   }
 
@@ -203,8 +303,8 @@ export async function updateCandidateTechnicalData(
   const attrs: Record<string, unknown> = {};
   const applied: string[] = [];
   if (input.tools) {
-    // tools carry a level (stored `tool|level`) → array of { tool: <id> } objects.
-    attrs["tools"] = buildArray(asArray(cur["tools"]), toolIds, mode, "tool");
+    // tools carry a level (stored `tool|level`) → array of { tool: <id>, level: <int> }.
+    attrs["tools"] = mergeKeyed(asArray(cur["tools"]), toolEntries, "tool", normExistingTool, mode);
     applied.push(`tools (${(attrs["tools"] as unknown[]).length})`);
   }
   if (input.activityAreas) {
@@ -218,9 +318,8 @@ export async function updateCandidateTechnicalData(
     applied.push(`expertiseAreas (${(attrs["expertiseAreas"] as unknown[]).length})`);
   }
   if (input.languages) {
-    const existing = asArray(cur["languages"]).map((x) => String(x));
-    attrs["languages"] =
-      mode === "replace" ? [...input.languages] : Array.from(new Set([...existing, ...input.languages]));
+    // { language: <id>, level: <CEFR id|""> } objects, deduped by language.
+    attrs["languages"] = mergeKeyed(asArray(cur["languages"]), languageEntries, "language", normExistingLanguage, mode);
     applied.push(`languages (${(attrs["languages"] as unknown[]).length})`);
   }
   if (input.skills !== undefined) {
@@ -250,13 +349,13 @@ const TECHNICAL_DATA_UPDATE_DESCRIPTION = `Met à jour le Dossier Technique (DT)
 
 Paramètres :
 - \`candidateId\` (requis) : ID du candidat.
-- \`tools\` (string[]) : outils/technos. Libellé OU id du dictionnaire \`setting.tool\` (ex: "C#", "React", ou "csharp").
+- \`tools\` (string[]) : outils/technos, format \`"<outil>"\` ou \`"<outil>|<niveau>"\`. Outil = libellé OU id de \`setting.tool\` (ex: "Cloud: AWS", "aws"). Niveau = entier 0–5 (0 = non évalué, défaut si absent). Ex: ["Cloud: AWS|2", "React"].
 - \`activityAreas\` (string[]) : domaines (\`setting.activityArea\`, hiérarchique — feuilles « Profils »/« Certifications »).
 - \`expertiseAreas\` (string[]) : secteurs, **restreints au jeu codifié S1–S12** (\`setting.expertiseArea\` dont la value contient [S1]…[S12]). Une valeur hors S1–S12 est rejetée.
 - \`skills\` (string) : texte libre des compétences.
 - \`experience\` (string) : libellé résolu en id via \`setting.experience\`.
-- \`languages\` (string[]) : format "langueId|niveauId" (transmis tel quel).
-- \`mode\` : \`merge\` (défaut, union sans doublon) ou \`replace\`.
+- \`languages\` (string[]) : format \`"<langue>|<niveau>"\`. Langue = libellé/id de \`setting.languageSpoken\` (ex: "Anglais", "anglais"). Niveau = CEFR via \`setting.languageLevel\` : "A1","A2","B1","B2","C1","C2" (ou la value "B1 - Indépendant-"). Ex: ["Anglais|B2"].
+- \`mode\` : \`merge\` (défaut, union sans doublon ; dédoublonnage par outil/langue) ou \`replace\`.
 
 Résolution libellé→id insensible casse/accents (match id exact OU value). **Tout libellé non résolu est une erreur bloquante** (aucune écriture partielle ; liste des libellés en échec). Stratégie read-modify-write : lecture du tdId via /candidates/{id}/technical-data, lecture du DT courant, fusion/remplacement, PUT /technical-datas/{tdId}.
 

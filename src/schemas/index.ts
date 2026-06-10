@@ -541,7 +541,7 @@ export const CandidateTechnicalDataUpdateSchema = z
       .array(z.string())
       .optional()
       .describe(
-        "Outils / technos : libellés OU ids du dictionnaire setting.tool (ex: ['C#','React'] ou ['csharp','react'])"
+        "Outils / technos, format '<outil>' ou '<outil>|<niveau>'. Outil = libellé OU id setting.tool. Niveau = entier 0–5 (0 = non évalué, défaut si absent ; hors 0–5 rejeté). Ex: ['Cloud: AWS|2','React']"
       ),
     activityAreas: z
       .array(z.string())
@@ -557,7 +557,12 @@ export const CandidateTechnicalDataUpdateSchema = z
       ),
     skills: z.string().optional().describe("Compétences en texte libre (attribut skills du DT)"),
     experience: z.string().optional().describe("Niveau d'expérience : libellé résolu en id via setting.experience"),
-    languages: z.array(z.string()).optional().describe("Langues au format 'langueId|niveauId' (transmis tel quel)"),
+    languages: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Langues, format '<langue>|<niveau>'. Langue = libellé/id setting.languageSpoken. Niveau CEFR setting.languageLevel : A1,A2,B1,B2,C1,C2 (ou la value, ex: 'B1 - Indépendant-'). Ex: ['Anglais|B2']"
+      ),
     mode: z
       .enum(["merge", "replace"])
       .default("merge")

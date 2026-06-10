@@ -3,7 +3,7 @@
 > Auto-generated from the server registrations. Do not edit by hand.
 > Regenerate with `npm run docs:tools` (CI fails if this file is stale).
 
-**172 tools** across **38 domains** · **12 prompts** · **21 resources**.
+**173 tools** across **38 domains** · **12 prompts** · **21 resources**.
 
 Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destructiveHint), `idempotent` (idempotentHint), `open-world` (openWorldHint, e.g. paginated keyword search).
 
@@ -70,7 +70,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_calendars_get` | Détails d'un calendrier | read · idempotent |
 | `boond_calendars_search` | Rechercher des calendriers | read · idempotent · open-world |
 
-### candidates (10)
+### candidates (11)
 
 | Tool | Title | Hints |
 |---|---|---|
@@ -83,6 +83,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_candidates_positionings` | Positionnements d'un candidat | read · idempotent |
 | `boond_candidates_search` | Rechercher des candidats | read · idempotent · open-world |
 | `boond_candidates_technical_data` | Compétences techniques d'un candidat | read · idempotent |
+| `boond_candidates_technical_data_update` | Modifier le dossier technique d'un candidat | write |
 | `boond_candidates_update` | Modifier un(e) candidat | write · idempotent |
 
 ### companies (14)

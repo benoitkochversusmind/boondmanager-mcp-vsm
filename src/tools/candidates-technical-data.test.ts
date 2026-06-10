@@ -39,6 +39,19 @@ const DICT_PAYLOAD = {
         { id: 1, value: "Junior" },
         { id: 5, value: "Senior" },
       ],
+      languageSpoken: [
+        { id: "anglais", value: "Anglais", isEnabled: true }, // lowercase id
+        { id: "allemand", value: "Allemand", isEnabled: true },
+        { id: "Italien", value: "Italien", isEnabled: true }, // capitalized id (heterogeneous)
+      ],
+      languageLevel: [
+        { id: "A1", value: "A1 - Elémentaire-", isEnabled: true },
+        { id: "A2", value: "A2 - Elémentaire+", isEnabled: true },
+        { id: "B1", value: "B1 - Indépendant-", isEnabled: true },
+        { id: "B2", value: "B2 - Indépendant+", isEnabled: true },
+        { id: "C1", value: "C1 - Expérimenté-", isEnabled: true },
+        { id: "C2", value: "C2 - Expérimenté+", isEnabled: true },
+      ],
     },
   },
 };
@@ -99,9 +112,12 @@ describe("updateCandidateTechnicalData — label→id resolution", () => {
     const [path, method] = api.mock.calls.find((c) => c[1] === "PUT")!;
     expect(path).toBe("/technical-datas/29489");
     expect(method).toBe("PUT");
-    // tools are wrapped as { tool: <id> } objects (BoondManager rejects flat ids
-    // with 1017 on /tools/0/tool because tools carry a level).
-    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1" }, { tool: "2" }]);
+    // tools are wrapped as { tool: <id>, level: <int> } objects (BoondManager rejects
+    // flat ids with 1017 on /tools/0/tool because tools carry a level; default 0).
+    expect(putAttrs(api)["tools"]).toEqual([
+      { tool: "1", level: 0 },
+      { tool: "2", level: 0 },
+    ]);
     expect(res.tdId).toBe("29489");
     // untouched fields are NOT sent
     expect(putAttrs(api)).not.toHaveProperty("activityAreas");
@@ -119,9 +135,19 @@ describe("updateCandidateTechnicalData — label→id resolution", () => {
       mode: "merge",
     });
     const attrs = putAttrs(api);
-    expect(attrs["tools"]).toEqual([{ tool: "2" }]); // wrapped
+    expect(attrs["tools"]).toEqual([{ tool: "2", level: 0 }]); // wrapped + default level 0
     expect(attrs["activityAreas"]).toEqual(["10"]); // flat
     expect(attrs["expertiseAreas"]).toEqual(["100"]); // flat
+  });
+
+  it("parses an explicit tool level (<outil>|<niveau>)", async () => {
+    mockDictionary();
+    const api = mockApi({ tools: [] });
+    await updateCandidateTechnicalData({ candidateId: "29514", tools: ["C#|4", "React"], mode: "merge" });
+    expect(putAttrs(api)["tools"]).toEqual([
+      { tool: "1", level: 4 }, // explicit level
+      { tool: "2", level: 0 }, // no level → 0
+    ]);
   });
 
   it("is accent- and case-insensitive on labels", async () => {
@@ -187,54 +213,77 @@ describe("updateCandidateTechnicalData — blocking errors (no partial write)", 
   it("lists every unresolved label across fields in one error", async () => {
     mockDictionary();
     mockApi({});
-    await expect(
-      updateCandidateTechnicalData({
-        candidateId: "29514",
-        tools: ["NopeTool"],
-        expertiseAreas: ["NopeSector"],
-        experience: "NopeXp",
-      })
-    ).rejects.toThrow(/NopeTool[\s\S]*NopeSector[\s\S]*NopeXp/);
+    const err = await updateCandidateTechnicalData({
+      candidateId: "29514",
+      tools: ["NopeTool"],
+      expertiseAreas: ["NopeSector"],
+      experience: "NopeXp",
+    }).catch((e: Error) => e.message);
+    // all three rejected entries are surfaced together (order-agnostic)
+    expect(err).toContain("NopeTool");
+    expect(err).toContain("NopeSector");
+    expect(err).toContain("NopeXp");
   });
 });
 
 describe("updateCandidateTechnicalData — merge vs replace", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("merge: unions with the existing array, deduplicating (tools wrapped)", async () => {
+  it("merge: unions with the existing array, deduplicating (tools wrapped, level preserved)", async () => {
     mockDictionary();
-    const api = mockApi({ tools: [{ tool: "1" }] }); // C# already present (real BoondManager shape)
+    const api = mockApi({ tools: [{ tool: "1", level: 3 }] }); // C# already present with a level
     await updateCandidateTechnicalData({
       candidateId: "29514",
-      tools: ["C#", "React"], // 1 (dup) + 2 (new)
+      tools: ["React"], // 2 (new)
       mode: "merge",
     });
-    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1" }, { tool: "2" }]);
+    expect(putAttrs(api)["tools"]).toEqual([
+      { tool: "1", level: 3 }, // existing level preserved
+      { tool: "2", level: 0 },
+    ]);
+  });
+
+  it("merge: a fresh tool entry overrides the existing one's level (new wins)", async () => {
+    mockDictionary();
+    const api = mockApi({ tools: [{ tool: "1", level: 1 }] });
+    await updateCandidateTechnicalData({ candidateId: "29514", tools: ["C#|5"], mode: "merge" });
+    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1", level: 5 }]);
   });
 
   it("merge: also tolerates flat existing tool ids when extracting", async () => {
     mockDictionary();
     const api = mockApi({ tools: ["1"] }); // defensive: flat existing
     await updateCandidateTechnicalData({ candidateId: "29514", tools: ["React"], mode: "merge" });
-    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1" }, { tool: "2" }]);
+    expect(putAttrs(api)["tools"]).toEqual([
+      { tool: "1", level: 0 },
+      { tool: "2", level: 0 },
+    ]);
   });
 
-  it("replace: keeps only the provided ids (tools wrapped)", async () => {
+  it("replace: keeps only the provided entries (tools wrapped)", async () => {
     mockDictionary();
-    const api = mockApi({ tools: [{ tool: "1" }, { tool: "99" }] });
+    const api = mockApi({
+      tools: [
+        { tool: "1", level: 2 },
+        { tool: "99", level: 4 },
+      ],
+    });
     await updateCandidateTechnicalData({
       candidateId: "29514",
       tools: ["React"],
       mode: "replace",
     });
-    expect(putAttrs(api)["tools"]).toEqual([{ tool: "2" }]);
+    expect(putAttrs(api)["tools"]).toEqual([{ tool: "2", level: 0 }]);
   });
 
   it("defaults to merge when mode is omitted", async () => {
     mockDictionary();
-    const api = mockApi({ tools: [{ tool: "1" }] });
+    const api = mockApi({ tools: [{ tool: "1", level: 0 }] });
     await updateCandidateTechnicalData({ candidateId: "29514", tools: ["React"] });
-    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1" }, { tool: "2" }]);
+    expect(putAttrs(api)["tools"]).toEqual([
+      { tool: "1", level: 0 },
+      { tool: "2", level: 0 },
+    ]);
   });
 
   it("merge on activityAreas/expertiseAreas unions flat ids (no wrapper)", async () => {
@@ -250,16 +299,93 @@ describe("updateCandidateTechnicalData — merge vs replace", () => {
     expect(putAttrs(api)["expertiseAreas"]).toEqual(["101", "100"]);
   });
 
-  it("merges languages (passthrough union) and writes skills verbatim", async () => {
+  it("writes skills verbatim", async () => {
     mockDictionary();
-    const api = mockApi({ languages: ["1|2"] });
+    const api = mockApi({});
+    await updateCandidateTechnicalData({ candidateId: "29514", skills: "C#, microservices" });
+    expect(putAttrs(api)["skills"]).toBe("C#, microservices");
+  });
+});
+
+describe("updateCandidateTechnicalData — languages (CEFR)", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("serializes { language: <id>, level: <CEFR id> }, resolving label/level by id OR value", async () => {
+    mockDictionary();
+    const api = mockApi({ languages: [] });
     await updateCandidateTechnicalData({
       candidateId: "29514",
-      languages: ["1|2", "3|4"],
-      skills: "C#, microservices",
+      languages: ["Anglais|B2", "allemand|B1 - Indépendant-"], // level by id, then by value
     });
-    expect(putAttrs(api)["languages"]).toEqual(["1|2", "3|4"]);
-    expect(putAttrs(api)["skills"]).toBe("C#, microservices");
+    expect(putAttrs(api)["languages"]).toEqual([
+      { language: "anglais", level: "B2" }, // canonical lowercase id emitted
+      { language: "allemand", level: "B1" },
+    ]);
+  });
+
+  it("emits the exact canonical id for heterogeneous-cased languages", async () => {
+    mockDictionary();
+    const api = mockApi({ languages: [] });
+    await updateCandidateTechnicalData({ candidateId: "29514", languages: ["italien|C1"] });
+    expect(putAttrs(api)["languages"]).toEqual([{ language: "Italien", level: "C1" }]); // capitalized canonical id
+  });
+
+  it("allows a language with no level (empty level)", async () => {
+    mockDictionary();
+    const api = mockApi({ languages: [] });
+    await updateCandidateTechnicalData({ candidateId: "29514", languages: ["Anglais"] });
+    expect(putAttrs(api)["languages"]).toEqual([{ language: "anglais", level: "" }]);
+  });
+
+  it("merge: converts existing {language,level} objects and dedups (new level wins)", async () => {
+    mockDictionary();
+    const api = mockApi({
+      languages: [
+        { language: "anglais", level: "A1" },
+        { language: "français", level: "" }, // legacy id absent from current dict → preserved
+      ],
+    });
+    await updateCandidateTechnicalData({ candidateId: "29514", languages: ["Anglais|C1"], mode: "merge" });
+    expect(putAttrs(api)["languages"]).toEqual([
+      { language: "anglais", level: "C1" }, // overridden
+      { language: "français", level: "" }, // preserved untouched
+    ]);
+  });
+
+  it("rejects an unknown language (blocking, no write)", async () => {
+    mockDictionary();
+    const api = mockApi({ languages: [] });
+    await expect(updateCandidateTechnicalData({ candidateId: "29514", languages: ["Klingon|B2"] })).rejects.toThrow(
+      /Klingon/
+    );
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown CEFR level (blocking, no write)", async () => {
+    mockDictionary();
+    const api = mockApi({ languages: [] });
+    await expect(
+      updateCandidateTechnicalData({ candidateId: "29514", languages: ["Anglais|courant"] })
+    ).rejects.toThrow(/courant/);
+    expect(api).not.toHaveBeenCalled();
+  });
+});
+
+describe("updateCandidateTechnicalData — tool level validation", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("rejects a tool level outside 0–5 (blocking, no write)", async () => {
+    mockDictionary();
+    const api = mockApi({ tools: [] });
+    await expect(updateCandidateTechnicalData({ candidateId: "29514", tools: ["C#|9"] })).rejects.toThrow(/0–5/);
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-integer tool level (blocking, no write)", async () => {
+    mockDictionary();
+    const api = mockApi({ tools: [] });
+    await expect(updateCandidateTechnicalData({ candidateId: "29514", tools: ["C#|abc"] })).rejects.toThrow(/0–5/);
+    expect(api).not.toHaveBeenCalled();
   });
 });
 

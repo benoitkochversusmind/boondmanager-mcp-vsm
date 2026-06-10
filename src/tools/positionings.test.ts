@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerPositioningTools, formatPositioningsList } from "./positionings.js";
 import * as dictionary from "../services/dictionary.js";
+import * as boondClient from "../services/boond-client.js";
 
 function createMockServer() {
   return {
@@ -165,5 +166,46 @@ describe("formatPositioningsList", () => {
   it("returns a clear message for an empty result", async () => {
     const text = await formatPositioningsList({ data: [] } as never);
     expect(text).toBe("Aucun positionnement trouvé.");
+  });
+});
+
+describe("boond_positionings_search entity-filter routing", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function getSearchHandler() {
+    const server = createMockServer();
+    registerPositioningTools(server);
+    const call = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_positionings_search");
+    return call![2] as (p: Record<string, unknown>) => Promise<unknown>;
+  }
+
+  it("routes candidateId/resourceId/projectId/opportunityId through keyword prefixes (not raw query params)", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({ byId: new Map(), byLabel: new Map() } as never);
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: [] } as never);
+
+    const handler = getSearchHandler();
+    await handler({ candidateId: "34592", projectId: "1864", page: 1, pageSize: 30 });
+
+    const query = apiSpy.mock.calls[0][3] as Record<string, unknown>;
+    expect(String(query["keywords"])).toContain("CAND34592");
+    expect(String(query["keywords"])).toContain("PRJ1864");
+    // entity ids must NOT leak as literal query params (the API ignores them)
+    expect(query["candidateId"]).toBeUndefined();
+    expect(query["projectId"]).toBeUndefined();
+  });
+
+  it("maps resourceId→COMP and opportunityId→AO and preserves user keywords", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({ byId: new Map(), byLabel: new Map() } as never);
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: [] } as never);
+
+    const handler = getSearchHandler();
+    await handler({ resourceId: "17537", opportunityId: "4370", keywords: "java", page: 1, pageSize: 30 });
+
+    const kw = String((apiSpy.mock.calls[0][3] as Record<string, unknown>)["keywords"]);
+    expect(kw).toContain("COMP17537");
+    expect(kw).toContain("AO4370");
+    expect(kw).toContain("java");
   });
 });

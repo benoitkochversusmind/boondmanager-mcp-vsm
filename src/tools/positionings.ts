@@ -145,7 +145,7 @@ export function registerPositioningTools(server: McpServer): void {
 
 Args:
   - keywords (string, optional): Termes de recherche
-  - candidateId, resourceId, projectId, opportunityId (string, optional): Filtrer par entité liée
+  - candidateId, resourceId, projectId, opportunityId (string, optional): Filtrer par entité liée. L'API /positionings ignore ces noms en query littérale → le serveur les route via les préfixes keyword BoondManager (CAND/COMP/PRJ/AO), vérifié en prod.
   - excludeApplications (boolean, optional, défaut false): masque les positionnements à l'état « 00 - Candidature annonce »
   - page, pageSize: Pagination
 
@@ -159,10 +159,19 @@ Returns: Une ligne par positionnement avec **consultant** (Prénom NOM, candidat
       },
     },
     async (params) => {
-      // excludeApplications est un filtre côté serveur MCP (sur le libellé résolu),
-      // pas un paramètre d'API → l'exclure de la query Boondmanager.
-      const { excludeApplications, ...searchParams } = params;
-      const query = buildSearchQuery(searchParams);
+      // excludeApplications : filtre côté serveur MCP (libellé résolu), pas un
+      // paramètre d'API. candidateId/resourceId/projectId/opportunityId : l'API
+      // /positionings ignore ces noms en query → on les injecte dans `keywords`
+      // via les préfixes BoondManager (CAND/COMP/PRJ/AO), comme boond_actions_search.
+      const { excludeApplications, candidateId, resourceId, projectId, opportunityId, keywords, ...rest } = params;
+      const prefixes: string[] = [];
+      if (candidateId) prefixes.push(`CAND${candidateId}`);
+      if (resourceId) prefixes.push(`COMP${resourceId}`);
+      if (projectId) prefixes.push(`PRJ${projectId}`);
+      if (opportunityId) prefixes.push(`AO${opportunityId}`);
+      const mergedKeywords = [prefixes.join(" "), keywords].filter(Boolean).join(" ").trim() || undefined;
+
+      const query = buildSearchQuery({ ...rest, keywords: mergedKeywords });
       query["include"] = POSITIONING_INCLUDE;
       const response = await apiRequest("/positionings", "GET", undefined, query);
       return {

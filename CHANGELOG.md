@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.14.1] - 2026-06-09
+
+Les filtres par entité de `boond_positionings_search` (`candidateId` / `resourceId` / `projectId` / `opportunityId`) fonctionnent enfin : l'API `/positionings` ignore ces noms en query littérale, le serveur les route désormais via les **préfixes keyword BoondManager** (comme `boond_actions_search`).
+
+### Corrigé
+
+- **`boond_positionings_search` — routage des filtres entité** (`src/tools/positionings.ts`). `candidateId → CAND<id>`, `resourceId → COMP<id>`, `projectId → PRJ<id>`, `opportunityId → AO<id>`, injectés dans `keywords` (un `keywords` utilisateur est préservé et concaténé). Vérifié en prod : `keywords=CAND34592` → 7 positionnements tous sur le candidat 34592 ; `keywords=COMP17537` → 43 positionnements tous sur la ressource 17537. Avant : les noms `candidateId=` étaient silencieusement ignorés → résultats non filtrés.
+
+### Tests
+
+- **+2 tests** (`positionings.test.ts`) : routage candidateId/projectId → préfixes (et absence des params bruts dans la query) ; resourceId→COMP + opportunityId→AO + préservation du `keywords` utilisateur. **594 tests passants** (vs 592 en 1.14.0).
+
 ## [1.14.0] - 2026-06-09
 
 `boond_positionings_search` affiche désormais le **nom du consultant** sur chaque ligne, et peut **masquer le bruit des candidatures sur annonce**.

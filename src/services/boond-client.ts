@@ -607,6 +607,81 @@ export async function uploadDocument(params: UploadDocumentParams): Promise<Json
   return (await response.json()) as JsonApiResponse;
 }
 
+/**
+ * Extract a filename from a `Content-Disposition` header, handling both the
+ * plain `filename="x"` and the RFC 5987 `filename*=UTF-8''x` forms. Exported
+ * for unit testing.
+ */
+export function parseContentDispositionFilename(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const star = header.match(/filename\*\s*=\s*[^']*''([^;]+)/i);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+      /* fall through to the plain form */
+    }
+  }
+  const plain = header.match(/filename\s*=\s*"?([^";]+)"?/i);
+  return plain?.[1]?.trim();
+}
+
+export interface FetchedDocument {
+  buffer: Buffer;
+  fileName: string;
+  contentType: string;
+}
+
+/**
+ * Download a BoondManager document's raw bytes by its composite id
+ * (e.g. `1896_resume`, `<n>_document`). BoondManager serves the file at
+ * `GET /documents/{id}` as a binary stream; the filename comes back in
+ * `Content-Disposition`. Reuses the per-request auth (AsyncLocalStorage JWT)
+ * and the shared rate limiter, like `apiRequest`/`uploadDocument`. Single
+ * attempt — kept simple; callers surface the error.
+ *
+ * NOTE: the exact endpoint (`GET /documents/{id}` → binary) is the one part of
+ * this feature that could not be verified read-only against the API (the RAML
+ * is Cloudflare-blocked and there is no raw-GET tool). It is the documented
+ * shape and is confirmed by the production smoke test; if it ever changes, this
+ * is the single place to adjust.
+ */
+export async function fetchDocument(documentId: string): Promise<FetchedDocument> {
+  const { baseUrl, authHeaderName, authHeaderValue } = getConfig();
+  const timeoutMs = resolveTimeoutMs();
+  const limiter = getRateLimiter();
+  if (limiter) await limiter.acquire();
+
+  const path = `/documents/${encodeURIComponent(documentId)}`;
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: "GET",
+      headers: { [authHeaderName]: authHeaderValue, Accept: "application/octet-stream, */*" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new Error(
+        `BoondManager document download timed out after ${timeoutMs}ms\nEndpoint: GET ${path}\n` +
+          "Hint: Increase BOOND_HTTP_TIMEOUT_MS or check connectivity / file size.",
+        { cause: err }
+      );
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(formatApiError(response.status, response.statusText, "GET", path, errorText));
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const contentType = response.headers.get("content-type") ?? "application/octet-stream";
+  const fileName = parseContentDispositionFilename(response.headers.get("content-disposition")) ?? documentId;
+  return { buffer, fileName, contentType };
+}
+
 export function buildSearchQuery(params: SearchParams): Record<string, QueryValue> {
   const query: Record<string, QueryValue> = {};
 

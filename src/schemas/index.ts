@@ -902,6 +902,21 @@ export const DocumentCreateSchema = z
   .strict();
 export type DocumentCreateInput = z.infer<typeof DocumentCreateSchema>;
 
+// ---- Document read schema (lecture de pièce jointe) ----
+
+export const DocumentGetSchema = z
+  .object({
+    documentId: z
+      .string()
+      .min(1)
+      .describe(
+        "ID composite du document tel que listé dans la relation resumes/files d'une entité " +
+          "(ex: '1896_resume' pour un CV, '12345_document' pour une pièce jointe)."
+      ),
+  })
+  .strict();
+export type DocumentGetInput = z.infer<typeof DocumentGetSchema>;
+
 // ---- Timesheet schemas ----
 
 export const ResourceTimesheetSchema = z

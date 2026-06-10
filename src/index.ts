@@ -44,7 +44,8 @@ import { registerReportingTools } from "./tools/reporting.js";
 import { registerPlanningAbsenceTools } from "./tools/planning-absences.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
 import { registerDocumentTools } from "./tools/documents.js";
-import { uploadDocument } from "./services/boond-client.js";
+import { registerDocumentReadTools } from "./tools/documents-read.js";
+import { uploadDocument, fetchDocument } from "./services/boond-client.js";
 import { MAX_DOCUMENT_BYTES } from "./constants.js";
 
 const REQUIRED_ENV = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_KEYVAULT_URL"];
@@ -139,6 +140,7 @@ function registerAllTools(server: McpServer): void {
   registerPlanningAbsenceTools(server);
   registerWorkflowTools(server);
   registerDocumentTools(server);
+  registerDocumentReadTools(server);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -288,6 +290,38 @@ app.post("/documents/upload", express.raw({ type: () => true, limit: MAX_DOCUMEN
     res.status(502).json({ error: "upload_failed", detail: message });
   }
 });
+// ── Out-of-band document download (read/save attachments) ────────────────────
+// Streams a BoondManager document's raw bytes to the caller (Cowork shell or a
+// browser) under the same Bearer auth as /mcp. The binary never passes through
+// the LLM. e.g.:
+//   curl -OJ -H "Authorization: Bearer $TOKEN" \
+//     "$URL/documents/download?documentId=1896_resume"
+app.get("/documents/download", async (req, res) => {
+  const user = await resolveUser(req, res);
+  if (!user) return; // resolveUser already wrote the 401/503
+
+  const documentId = (req.query.documentId as string) ?? "";
+  if (!documentId) {
+    res.status(400).json({ error: "bad_request", detail: "documentId (query) est requis." });
+    return;
+  }
+
+  try {
+    const doc = await requestContext.run({ userEmail: user.email, boondJwt: user.boondJwt }, () =>
+      fetchDocument(documentId)
+    );
+    const safeName = doc.fileName.replace(/["\r\n]/g, "");
+    res.setHeader("Content-Type", doc.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+    res.setHeader("Content-Length", String(doc.buffer.length));
+    res.send(doc.buffer);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[DOWNLOAD] failed:", message);
+    res.status(502).json({ error: "download_failed", detail: message });
+  }
+});
+
 // Express raw() rejects oversize bodies with a PayloadTooLargeError — turn it
 // into a clean JSON 413 for this route.
 app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {

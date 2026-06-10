@@ -37,3 +37,4 @@ export { registerReportingTools } from "./reporting.js";
 export { registerPlanningAbsenceTools } from "./planning-absences.js";
 export { registerWorkflowTools } from "./workflows.js";
 export { registerDocumentTools } from "./documents.js";
+export { registerDocumentReadTools } from "./documents-read.js";

@@ -349,13 +349,13 @@ const TECHNICAL_DATA_UPDATE_DESCRIPTION = `Met à jour le Dossier Technique (DT)
 
 Paramètres :
 - \`candidateId\` (requis) : ID du candidat.
-- \`tools\` (string[]) : outils/technos, format \`"<outil>"\` ou \`"<outil>|<niveau>"\`. Outil = libellé OU id de \`setting.tool\` (ex: "Cloud: AWS", "aws"). Niveau = entier 0–5 (0 = non évalué, défaut si absent). Ex: ["Cloud: AWS|2", "React"].
+- \`tools\` (string[]) : outils/technos, format \`"<outil>"\` ou \`"<outil>|<niveau>"\`. Outil = libellé OU id de \`setting.tool\`. Le libellé doit matcher la **value exacte** du dictionnaire (« C# » seul NE résout PAS → « .Net: C# » ou l'id « csharp »). Niveau = entier 0–5 (0 = non évalué, défaut si absent). Ex: ["Cloud: AWS|2", "React"].
 - \`activityAreas\` (string[]) : domaines (\`setting.activityArea\`, hiérarchique — feuilles « Profils »/« Certifications »).
 - \`expertiseAreas\` (string[]) : secteurs, **restreints au jeu codifié S1–S12** (\`setting.expertiseArea\` dont la value contient [S1]…[S12]). Une valeur hors S1–S12 est rejetée.
 - \`skills\` (string) : texte libre des compétences.
 - \`experience\` (string) : libellé résolu en id via \`setting.experience\`.
-- \`languages\` (string[]) : format \`"<langue>|<niveau>"\`. Langue = libellé/id de \`setting.languageSpoken\` (ex: "Anglais", "anglais"). Niveau = CEFR via \`setting.languageLevel\` : "A1","A2","B1","B2","C1","C2" (ou la value "B1 - Indépendant-"). Ex: ["Anglais|B2"].
-- \`mode\` : \`merge\` (défaut, union sans doublon ; dédoublonnage par outil/langue) ou \`replace\`.
+- \`languages\` (string[]) : format \`"<langue>|<niveau>"\`. Langue = libellé/id de \`setting.languageSpoken\`. Niveau = CEFR via \`setting.languageLevel\` : "A1","A2","B1","B2","C1","C2" (ou la value "B1 - Indépendant-"). Ex: ["Anglais|B2"]. En merge, le niveau d'une langue déjà présente est écrasé.
+- \`mode\` : \`merge\` (défaut, union sans doublon ; dédoublonnage par outil/langue) ou \`replace\` (remplace les seuls champs fournis).
 
 Résolution libellé→id insensible casse/accents (match id exact OU value). **Tout libellé non résolu est une erreur bloquante** (aucune écriture partielle ; liste des libellés en échec). Stratégie read-modify-write : lecture du tdId via /candidates/{id}/technical-data, lecture du DT courant, fusion/remplacement, PUT /technical-datas/{tdId}.
 

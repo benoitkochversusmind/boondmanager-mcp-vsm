@@ -99,11 +99,29 @@ describe("updateCandidateTechnicalData — label→id resolution", () => {
     const [path, method] = api.mock.calls.find((c) => c[1] === "PUT")!;
     expect(path).toBe("/technical-datas/29489");
     expect(method).toBe("PUT");
-    expect(putAttrs(api)["tools"]).toEqual(["1", "2"]);
+    // tools are wrapped as { tool: <id> } objects (BoondManager rejects flat ids
+    // with 1017 on /tools/0/tool because tools carry a level).
+    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1" }, { tool: "2" }]);
     expect(res.tdId).toBe("29489");
     // untouched fields are NOT sent
     expect(putAttrs(api)).not.toHaveProperty("activityAreas");
     expect(putAttrs(api)).not.toHaveProperty("skills");
+  });
+
+  it("writes tools as { tool: id } objects but activityAreas/expertiseAreas as flat ids", async () => {
+    mockDictionary();
+    const api = mockApi({ tools: [], activityAreas: [], expertiseAreas: [] });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      tools: ["React"],
+      activityAreas: ["Développeur"],
+      expertiseAreas: ["Banque [S1]"],
+      mode: "merge",
+    });
+    const attrs = putAttrs(api);
+    expect(attrs["tools"]).toEqual([{ tool: "2" }]); // wrapped
+    expect(attrs["activityAreas"]).toEqual(["10"]); // flat
+    expect(attrs["expertiseAreas"]).toEqual(["100"]); // flat
   });
 
   it("is accent- and case-insensitive on labels", async () => {
@@ -183,40 +201,53 @@ describe("updateCandidateTechnicalData — blocking errors (no partial write)", 
 describe("updateCandidateTechnicalData — merge vs replace", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("merge: unions with the existing array, deduplicating", async () => {
+  it("merge: unions with the existing array, deduplicating (tools wrapped)", async () => {
     mockDictionary();
-    const api = mockApi({ tools: ["1"] }); // C# already present
+    const api = mockApi({ tools: [{ tool: "1" }] }); // C# already present (real BoondManager shape)
     await updateCandidateTechnicalData({
       candidateId: "29514",
       tools: ["C#", "React"], // 1 (dup) + 2 (new)
       mode: "merge",
     });
-    expect(putAttrs(api)["tools"]).toEqual(["1", "2"]);
+    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1" }, { tool: "2" }]);
   });
 
-  it("replace: keeps only the provided ids", async () => {
+  it("merge: also tolerates flat existing tool ids when extracting", async () => {
     mockDictionary();
-    const api = mockApi({ tools: ["1", "99"] });
+    const api = mockApi({ tools: ["1"] }); // defensive: flat existing
+    await updateCandidateTechnicalData({ candidateId: "29514", tools: ["React"], mode: "merge" });
+    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1" }, { tool: "2" }]);
+  });
+
+  it("replace: keeps only the provided ids (tools wrapped)", async () => {
+    mockDictionary();
+    const api = mockApi({ tools: [{ tool: "1" }, { tool: "99" }] });
     await updateCandidateTechnicalData({
       candidateId: "29514",
       tools: ["React"],
       mode: "replace",
     });
-    expect(putAttrs(api)["tools"]).toEqual(["2"]);
+    expect(putAttrs(api)["tools"]).toEqual([{ tool: "2" }]);
   });
 
   it("defaults to merge when mode is omitted", async () => {
     mockDictionary();
-    const api = mockApi({ tools: ["1"] });
+    const api = mockApi({ tools: [{ tool: "1" }] });
     await updateCandidateTechnicalData({ candidateId: "29514", tools: ["React"] });
-    expect(putAttrs(api)["tools"]).toEqual(["1", "2"]);
+    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1" }, { tool: "2" }]);
   });
 
-  it("aligns to the EXISTING element shape ({id} objects → emit objects)", async () => {
+  it("merge on activityAreas/expertiseAreas unions flat ids (no wrapper)", async () => {
     mockDictionary();
-    const api = mockApi({ tools: [{ id: "1" }] }); // object-shaped existing array
-    await updateCandidateTechnicalData({ candidateId: "29514", tools: ["React"], mode: "merge" });
-    expect(putAttrs(api)["tools"]).toEqual([{ id: "1" }, { id: "2" }]);
+    const api = mockApi({ activityAreas: ["11"], expertiseAreas: ["101"] });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      activityAreas: ["Développeur"], // → 10, unions with existing 11
+      expertiseAreas: ["Banque [S1]"], // → 100, unions with existing 101
+      mode: "merge",
+    });
+    expect(putAttrs(api)["activityAreas"]).toEqual(["11", "10"]);
+    expect(putAttrs(api)["expertiseAreas"]).toEqual(["101", "100"]);
   });
 
   it("merges languages (passthrough union) and writes skills verbatim", async () => {

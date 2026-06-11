@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.18.1] - 2026-06-11
+
+### Corrigé
+
+- **`boond_candidates_administrative_update` renvoyait `405 Method Not Allowed`** — l'écriture passait par `PATCH /candidates/{id}`, verbe rejeté par l'API, et les champs administratifs ne vivent pas sur l'endpoint de base. Désormais routage par cible en **PUT** : les attributs administratifs (salaires, contrat souhaité, situation, nationalité…) → **`PUT /candidates/{id}/administrative`** (sous-ressource), la disponibilité et la mobilité → **`PUT /candidates/{id}`**. Création de contrat (`dependsOn`) confirmée OK en prod (v1.18.0), inchangée.
+
 ## [1.18.0] - 2026-06-11
 
 Ouvre en **écriture** des informations candidat jusqu'ici non modifiables (disponibilité, mobilité, administratif/salaire/contrat souhaité) et fiabilise/enrichit les **contrats de travail**.

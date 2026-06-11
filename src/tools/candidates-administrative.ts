@@ -13,19 +13,18 @@ import type { JsonApiResource, JsonApiResponse } from "../types.js";
 //   - administrative  : salaries (actual / desired{min,max}), average daily costs,
 //                       desiredContract (setting.typeOf.contract), situation
 //                       (setting.situation), nationality, birth, comments.
-// All of these belong to the SAME candidate entity (the /administrative tab is a
-// view on it), so we write them together via PATCH /candidates/{id}.
+//
+// Write routing (verified in prod — PATCH /candidates/{id} returns 405):
+//   - base attributes        → PUT /candidates/{id}
+//   - administrative subset   → PUT /candidates/{id}/administrative (sub-resource)
 //
 // Label→id resolution (accent/case-insensitive) for mobilityAreas / desiredContract
 // / situation; any unresolved label is a blocking error (no partial write), like
 // the technical-data tool.
 //
-// NOTE (prod-validate): the exact write surface couldn't be verified read-only
-// (RAML Cloudflare-blocked). Hypothesis: PATCH /candidates/{id} accepts the
-// administrative attributes (one entity). If prod rejects them, switch the write
-// to PUT /candidates/{id}/administrative (single, centralized place below).
-// mobilityAreas are sent as a flat id array (like activityAreas) — adjust to
-// `{ mobilityArea: id }` objects here if the API requires it.
+// Still prod-validate: `availability` format (date), and `mobilityAreas` write
+// shape — sent as a flat id array (like activityAreas); switch to
+// `{ mobilityArea: id }` objects in buildArray-equivalent below if 1017 occurs.
 
 function norm(s: string): string {
   return s
@@ -190,11 +189,31 @@ export async function updateCandidateAdministrative(
     );
   }
 
-  const body = buildJsonApiBody("candidate", attrs, input.candidateId);
-  const response = await apiRequest(`/candidates/${input.candidateId}`, "PATCH", body);
-  // Fallback if the API rejects administrative attributes on the base PATCH
-  // (prod-validate): const response = await apiRequest(`/candidates/${input.candidateId}/administrative`, "PUT", body);
-  return { response, applied };
+  // Route each field to its write target — verified in prod: PATCH /candidates
+  // is rejected (405), so we use PUT, and the administrative attributes live on
+  // the dedicated sub-resource:
+  //   - base attributes (availability, mobilityAreas) → PUT /candidates/{id}
+  //   - administrative attributes                     → PUT /candidates/{id}/administrative
+  // (Fallback if the admin sub-resource PUT is ever rejected: send adminAttrs to
+  //  PUT /candidates/{id} as well — the administrative payload is the candidate.)
+  const BASE_KEYS = new Set(["availability", "mobilityAreas"]);
+  const baseAttrs: Record<string, unknown> = {};
+  const adminAttrs: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(attrs)) (BASE_KEYS.has(k) ? baseAttrs : adminAttrs)[k] = v;
+
+  const id = input.candidateId;
+  let response: JsonApiResponse | undefined;
+  if (Object.keys(baseAttrs).length > 0) {
+    response = await apiRequest(`/candidates/${id}`, "PUT", buildJsonApiBody("candidate", baseAttrs, id));
+  }
+  if (Object.keys(adminAttrs).length > 0) {
+    response = await apiRequest(
+      `/candidates/${id}/administrative`,
+      "PUT",
+      buildJsonApiBody("candidate", adminAttrs, id)
+    );
+  }
+  return { response: response as JsonApiResponse, applied };
 }
 
 const DESCRIPTION = `Met à jour la **disponibilité**, la **mobilité** et les **données administratives** d'un candidat (champs non couverts par boond_candidates_update).
@@ -209,7 +228,7 @@ Paramètres :
 - \`situation\` : situation familiale, libellé OU id \`setting.situation\`.
 - \`nationality\`, \`dateOfBirth\`, \`placeOfBirth\`, \`healthCareNumber\`, \`administrativeComments\`.
 
-Résolution libellé→id insensible casse/accents (mobilité / contrat / situation). **Tout libellé non résolu est une erreur bloquante** (aucune écriture partielle). Seuls les champs fournis sont modifiés ; pour une fourchette, la borne non fournie est préservée. Écriture via PATCH /candidates/{id}.`;
+Résolution libellé→id insensible casse/accents (mobilité / contrat / situation). **Tout libellé non résolu est une erreur bloquante** (aucune écriture partielle). Seuls les champs fournis sont modifiés ; pour une fourchette, la borne non fournie est préservée. Écriture : PUT /candidates/{id}/administrative (administratif) et/ou PUT /candidates/{id} (disponibilité, mobilité).`;
 
 export function registerCandidateAdministrativeTools(server: McpServer): void {
   server.registerTool(

@@ -12,6 +12,7 @@ import {
 import type { BoondConfig, JsonApiResponse, SearchParams } from "../types.js";
 import { TokenBucket } from "./rate-limiter.js";
 import { requestContext } from "../auth/context.js";
+import { logger } from "./logger.js";
 
 let config: BoondConfig | null = null;
 
@@ -431,6 +432,13 @@ export async function apiRequest(
     Accept: "application/json",
     "Content-Type": "application/json",
   };
+
+  // Trace every write (POST/PUT/PATCH/DELETE) with its exact method + path —
+  // invaluable for diagnosing endpoint/verb mismatches in prod (Log Analytics).
+  // Reads are left silent to keep the log volume sane.
+  if (method !== "GET") {
+    logger.info({ method, path: url.pathname }, "BoondManager write request");
+  }
 
   const timeoutMs = resolveTimeoutMs();
   const retry = resolveRetryConfig();

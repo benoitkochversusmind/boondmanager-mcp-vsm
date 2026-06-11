@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   registerCandidateTools,
   registerCandidateTechnicalDataTools,
+  registerCandidateAdministrativeTools,
   registerResourceTools,
   registerContactTools,
   registerCompanyTools,
@@ -121,6 +122,7 @@ export function createMcpServer(): McpServer {
 
   registerCandidateTools(server);
   registerCandidateTechnicalDataTools(server);
+  registerCandidateAdministrativeTools(server);
   registerResourceTools(server);
   registerContactTools(server);
   registerCompanyTools(server);

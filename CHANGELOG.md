@@ -3,6 +3,26 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.18.0] - 2026-06-11
+
+Ouvre en **écriture** des informations candidat jusqu'ici non modifiables (disponibilité, mobilité, administratif/salaire/contrat souhaité) et fiabilise/enrichit les **contrats de travail**.
+
+### Ajouté
+
+- **`boond_candidates_administrative_update`** — met à jour, via PATCH `/candidates/{id}` (read-modify-write) :
+  - **disponibilité** (`availability`) et **mobilité** (`mobilityAreas` — libellés/ids résolus contre `setting.mobilityArea`, dict hiérarchique régions › villes) ;
+  - **administratif / prétentions** : `actualSalary`, `desiredSalary` (min/max), `actualAverageDailyCost`, `desiredAverageDailyCost` (min/max), **contrat souhaité** (`desiredContract` → `setting.typeOf.contract`), **situation** (`setting.situation`), nationalité, naissance, commentaires.
+  - Résolution libellé→id insensible casse/accents ; **tout libellé non résolu = erreur bloquante** (aucune écriture partielle) ; une fourchette ne fournissant qu'une borne préserve l'autre. Le serveur expose **179 outils**.
+- **`boond_contracts_update`** — modification d'un contrat de travail (PUT `/contracts/{id}`) : type, dates, classification, salaires, durée hebdo, période d'essai…
+
+### Corrigé
+
+- **`boond_contracts_create`** — la création liait la ressource via `relationships.resource` (ignoré par l'API → contrat orphelin). Désormais la relation polymorphe **`dependsOn` (type `resource`)** est utilisée (même correctif que les positionnements). Création enrichie (type via `setting.typeOf.contract`, classification, salaires mensuel/horaire, durée, période d'essai, commentaires).
+
+### Tests
+
+- Vitest : résolution mobilité/contrat/situation, fusion de fourchette salariale, garde-fous bloquants, `dependsOn` du contrat, résolution `typeOf`, update PUT. Suite à **655 tests**.
+
 ## [1.17.1] - 2026-06-10
 
 ### Corrigé

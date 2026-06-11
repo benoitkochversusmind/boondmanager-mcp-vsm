@@ -46,7 +46,7 @@ function mockDictionary() {
   } as never);
 }
 
-/** GET /candidates/{id}/administrative → currentAdmin ; PATCH /candidates/{id} → echo. */
+/** GET /candidates/{id}/administrative → currentAdmin ; PUT (base or admin) → echo. */
 function mockApi(currentAdmin: Record<string, unknown> = {}) {
   return vi
     .spyOn(boondClient, "apiRequest")
@@ -54,7 +54,7 @@ function mockApi(currentAdmin: Record<string, unknown> = {}) {
       if (method === "GET" && path.endsWith("/administrative")) {
         return { data: { type: "candidate", id: "2123", attributes: currentAdmin } } as never;
       }
-      if (method === "PATCH" && /\/candidates\/[^/]+$/.test(path)) {
+      if (method === "PUT") {
         const attrs = (body as { data?: { attributes?: unknown } } | undefined)?.data?.attributes ?? {};
         return { data: { type: "candidate", id: "2123", attributes: attrs } } as never;
       }
@@ -62,16 +62,19 @@ function mockApi(currentAdmin: Record<string, unknown> = {}) {
     });
 }
 
-function patchBody(spy: ReturnType<typeof vi.spyOn>): { attributes: Record<string, unknown>; id?: string } {
-  const call = spy.mock.calls.find((c) => c[1] === "PATCH");
-  expect(call, "a PATCH should have happened").toBeTruthy();
-  return (call![2] as { data: { attributes: Record<string, unknown>; id?: string } }).data;
+/** Return the data block of the PUT to the given path, or undefined if none. */
+function putTo(
+  spy: ReturnType<typeof vi.spyOn>,
+  path: string
+): { attributes: Record<string, unknown>; id?: string } | undefined {
+  const call = spy.mock.calls.find((c) => c[1] === "PUT" && c[0] === path);
+  return call ? (call[2] as { data: { attributes: Record<string, unknown>; id?: string } }).data : undefined;
 }
 
 describe("updateCandidateAdministrative — resolution & write", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("resolves mobility/desiredContract/situation and PATCHes /candidates/{id}", async () => {
+  it("routes base fields to PUT /candidates/{id} and admin fields to PUT /candidates/{id}/administrative", async () => {
     mockDictionary();
     const api = mockApi({});
     await updateCandidateAdministrative({
@@ -82,23 +85,31 @@ describe("updateCandidateAdministrative — resolution & write", () => {
       situation: "Marié(e)",
       actualSalary: 45000,
     });
-    const [path, method] = api.mock.calls.find((c) => c[1] === "PATCH")!;
-    expect(path).toBe("/candidates/2123");
-    expect(method).toBe("PATCH");
-    const data = patchBody(api);
-    expect(data.id).toBe("2123");
-    expect(data.attributes["availability"]).toBe("2026-09-01");
-    expect(data.attributes["mobilityAreas"]).toEqual(["Strasbourg", "toutelafrance"]); // canonical ids
-    expect(data.attributes["desiredContract"]).toBe(3); // Freelance → 3
-    expect(data.attributes["situation"]).toBe(1); // Marié(e) → 1
-    expect(data.attributes["actualSalary"]).toBe(45000);
+    // base (availability + mobility) → PUT /candidates/2123
+    const base = putTo(api, "/candidates/2123");
+    expect(base, "base PUT should have happened").toBeTruthy();
+    expect(base!.id).toBe("2123");
+    expect(base!.attributes["availability"]).toBe("2026-09-01");
+    expect(base!.attributes["mobilityAreas"]).toEqual(["Strasbourg", "toutelafrance"]); // canonical ids
+    expect(base!.attributes).not.toHaveProperty("desiredContract"); // admin not on base
+    // administrative → PUT /candidates/2123/administrative
+    const admin = putTo(api, "/candidates/2123/administrative");
+    expect(admin, "admin PUT should have happened").toBeTruthy();
+    expect(admin!.attributes["desiredContract"]).toBe(3); // Freelance → 3
+    expect(admin!.attributes["situation"]).toBe(1); // Marié(e) → 1
+    expect(admin!.attributes["actualSalary"]).toBe(45000);
+    expect(admin!.attributes).not.toHaveProperty("availability"); // base not on admin
   });
 
-  it("merges a salary range, preserving the bound not provided", async () => {
+  it("writes only the administrative endpoint when no base field is provided", async () => {
     mockDictionary();
     const api = mockApi({ desiredSalary: { min: 40000, max: 55000 } });
     await updateCandidateAdministrative({ candidateId: "2123", desiredSalaryMin: 48000 });
-    expect(patchBody(api).attributes["desiredSalary"]).toEqual({ min: 48000, max: 55000 });
+    expect(putTo(api, "/candidates/2123"), "no base PUT").toBeUndefined();
+    expect(putTo(api, "/candidates/2123/administrative")!.attributes["desiredSalary"]).toEqual({
+      min: 48000, // provided
+      max: 55000, // preserved from current
+    });
   });
 
   it("rejects an unknown label (blocking, no write)", async () => {

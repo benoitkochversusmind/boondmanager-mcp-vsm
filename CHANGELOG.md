@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.18.2] - 2026-06-11
+
+### Corrigé
+
+- **`boond_candidates_administrative_update` : 405 persistant** — le test prod a montré que `PUT /candidates/{id}` (base) est **aussi** rejeté (405), pas seulement `PATCH`, et que l'écriture base partait en premier (avant d'atteindre `/administrative`). Désormais **toute** l'écriture (y compris disponibilité/mobilité) cible la **sous-ressource `/candidates/{id}/administrative`**, en **PUT** avec **repli automatique sur POST** si l'API renvoie 404/405 (le verbe exact dépend de l'instance).
+
+### Ajouté (observabilité)
+
+- **Log des requêtes d'écriture** : chaque appel non-GET vers BoondManager logge `méthode + chemin` (niveau info → visible dans Log Analytics), pour diagnostiquer sans ambiguïté les mismatches endpoint/verbe en prod.
+
 ## [1.18.1] - 2026-06-11
 
 ### Corrigé

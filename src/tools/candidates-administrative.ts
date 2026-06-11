@@ -189,31 +189,28 @@ export async function updateCandidateAdministrative(
     );
   }
 
-  // Route each field to its write target — verified in prod: PATCH /candidates
-  // is rejected (405), so we use PUT, and the administrative attributes live on
-  // the dedicated sub-resource:
-  //   - base attributes (availability, mobilityAreas) → PUT /candidates/{id}
-  //   - administrative attributes                     → PUT /candidates/{id}/administrative
-  // (Fallback if the admin sub-resource PUT is ever rejected: send adminAttrs to
-  //  PUT /candidates/{id} as well — the administrative payload is the candidate.)
-  const BASE_KEYS = new Set(["availability", "mobilityAreas"]);
-  const baseAttrs: Record<string, unknown> = {};
-  const adminAttrs: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(attrs)) (BASE_KEYS.has(k) ? baseAttrs : adminAttrs)[k] = v;
-
+  // Write target — verified in prod: BOTH `PATCH /candidates/{id}` and
+  // `PUT /candidates/{id}` return 405. The editable profile (incl. availability
+  // / mobility) is written through the dedicated administrative sub-resource.
+  // The verb is instance-dependent on the external API → try PUT, fall back to
+  // POST on a 404/405. apiRequest logs every attempt (method + path).
   const id = input.candidateId;
-  let response: JsonApiResponse | undefined;
-  if (Object.keys(baseAttrs).length > 0) {
-    response = await apiRequest(`/candidates/${id}`, "PUT", buildJsonApiBody("candidate", baseAttrs, id));
+  const adminPath = `/candidates/${id}/administrative`;
+  const body = buildJsonApiBody("candidate", attrs, id);
+  let response: JsonApiResponse;
+  try {
+    response = await apiRequest(adminPath, "PUT", body);
+  } catch (err) {
+    // Some external-API instances expose the administrative tab write via POST
+    // rather than PUT. Fall back on a 404/405 (method/endpoint mismatch) only.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/\b40[45]\b/.test(msg)) {
+      response = await apiRequest(adminPath, "POST", body);
+    } else {
+      throw err;
+    }
   }
-  if (Object.keys(adminAttrs).length > 0) {
-    response = await apiRequest(
-      `/candidates/${id}/administrative`,
-      "PUT",
-      buildJsonApiBody("candidate", adminAttrs, id)
-    );
-  }
-  return { response: response as JsonApiResponse, applied };
+  return { response, applied };
 }
 
 const DESCRIPTION = `Met à jour la **disponibilité**, la **mobilité** et les **données administratives** d'un candidat (champs non couverts par boond_candidates_update).

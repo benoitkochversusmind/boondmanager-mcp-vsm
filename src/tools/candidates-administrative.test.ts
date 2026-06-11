@@ -74,7 +74,7 @@ function putTo(
 describe("updateCandidateAdministrative — resolution & write", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("routes base fields to PUT /candidates/{id} and admin fields to PUT /candidates/{id}/administrative", async () => {
+  it("writes ALL fields via PUT /candidates/{id}/administrative (never the base path)", async () => {
     mockDictionary();
     const api = mockApi({});
     await updateCandidateAdministrative({
@@ -85,31 +85,41 @@ describe("updateCandidateAdministrative — resolution & write", () => {
       situation: "Marié(e)",
       actualSalary: 45000,
     });
-    // base (availability + mobility) → PUT /candidates/2123
-    const base = putTo(api, "/candidates/2123");
-    expect(base, "base PUT should have happened").toBeTruthy();
-    expect(base!.id).toBe("2123");
-    expect(base!.attributes["availability"]).toBe("2026-09-01");
-    expect(base!.attributes["mobilityAreas"]).toEqual(["Strasbourg", "toutelafrance"]); // canonical ids
-    expect(base!.attributes).not.toHaveProperty("desiredContract"); // admin not on base
-    // administrative → PUT /candidates/2123/administrative
+    expect(putTo(api, "/candidates/2123"), "must NOT hit the base path (405)").toBeUndefined();
     const admin = putTo(api, "/candidates/2123/administrative");
     expect(admin, "admin PUT should have happened").toBeTruthy();
+    expect(admin!.id).toBe("2123");
+    expect(admin!.attributes["availability"]).toBe("2026-09-01");
+    expect(admin!.attributes["mobilityAreas"]).toEqual(["Strasbourg", "toutelafrance"]); // canonical ids
     expect(admin!.attributes["desiredContract"]).toBe(3); // Freelance → 3
     expect(admin!.attributes["situation"]).toBe(1); // Marié(e) → 1
     expect(admin!.attributes["actualSalary"]).toBe(45000);
-    expect(admin!.attributes).not.toHaveProperty("availability"); // base not on admin
   });
 
-  it("writes only the administrative endpoint when no base field is provided", async () => {
+  it("merges a salary range, preserving the bound not provided", async () => {
     mockDictionary();
     const api = mockApi({ desiredSalary: { min: 40000, max: 55000 } });
     await updateCandidateAdministrative({ candidateId: "2123", desiredSalaryMin: 48000 });
-    expect(putTo(api, "/candidates/2123"), "no base PUT").toBeUndefined();
     expect(putTo(api, "/candidates/2123/administrative")!.attributes["desiredSalary"]).toEqual({
       min: 48000, // provided
       max: 55000, // preserved from current
     });
+  });
+
+  it("falls back to POST /administrative when PUT returns 405", async () => {
+    mockDictionary();
+    const calls: Array<{ method: string; path: string }> = [];
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path: string, method: string) => {
+      if (method === "GET") return { data: { type: "candidate", id: "2123", attributes: {} } } as never;
+      calls.push({ method, path });
+      if (method === "PUT") throw new Error("BoondManager API 405 Method Not Allowed");
+      return { data: { type: "candidate", id: "2123", attributes: {} } } as never; // POST ok
+    });
+    await updateCandidateAdministrative({ candidateId: "2123", actualSalary: 50000 });
+    expect(calls).toEqual([
+      { method: "PUT", path: "/candidates/2123/administrative" },
+      { method: "POST", path: "/candidates/2123/administrative" },
+    ]);
   });
 
   it("rejects an unknown label (blocking, no write)", async () => {

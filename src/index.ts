@@ -507,22 +507,35 @@ app.get("/oauth/callback", async (req, res) => {
 app.post("/oauth/token", async (req, res) => {
   const { code, code_verifier, grant_type } = req.body as Record<string, string>;
 
-  // Validate client credentials if provided
   const configuredClientId = process.env.OAUTH_CLIENT_ID;
   const configuredClientSecret = process.env.OAUTH_CLIENT_SECRET;
   const { client_id: incomingClientId, client_secret: incomingClientSecret } = req.body as Record<string, string>;
-  if (configuredClientId && incomingClientId) {
-    if (
-      incomingClientId !== configuredClientId ||
-      (configuredClientSecret && incomingClientSecret !== configuredClientSecret)
-    ) {
+
+  // Validate client_id when both configured and provided. NB: the public client
+  // (Claude.ai, authorization_code + PKCE) presents NO secret — PKCE is the proof
+  // of possession — so we never require a secret on this path.
+  if (configuredClientId && incomingClientId && incomingClientId !== configuredClientId) {
+    res.status(401).json({ error: "invalid_client" });
+    return;
+  }
+
+  // client_credentials: org-level access (maps to first configured user).
+  // This grant mints a token that BYPASSES the interactive Entra @versusmind.eu
+  // gate, so it MUST prove possession of a configured client secret (exact
+  // client_id + client_secret match). When OAUTH_CLIENT_SECRET is unset the grant
+  // is disabled entirely — never issue an anonymous org token.
+  if (grant_type === "client_credentials") {
+    if (!configuredClientSecret) {
+      res.status(400).json({
+        error: "unsupported_grant_type",
+        error_description: "client_credentials is disabled (no OAUTH_CLIENT_SECRET configured)",
+      });
+      return;
+    }
+    if (incomingClientId !== configuredClientId || incomingClientSecret !== configuredClientSecret) {
       res.status(401).json({ error: "invalid_client" });
       return;
     }
-  }
-
-  // client_credentials: org-level access (maps to first configured user)
-  if (grant_type === "client_credentials") {
     const orgEmail = process.env.MCP_USER_1_EMAIL ?? "benoit.koch@versusmind.eu";
     let boondJwt: string;
     try {

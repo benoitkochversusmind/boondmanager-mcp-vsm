@@ -571,6 +571,50 @@ export const CandidateTechnicalDataUpdateSchema = z
   .strict();
 export type CandidateTechnicalDataUpdateInput = z.infer<typeof CandidateTechnicalDataUpdateSchema>;
 
+// ---- Candidate availability / mobility / administrative (salaire, contrat souhaité) write schema ----
+
+export const CandidateAdministrativeUpdateSchema = z
+  .object({
+    candidateId: z.string().min(1).describe("ID du candidat à modifier"),
+    // --- Base (disponibilité / mobilité) ---
+    availability: z
+      .string()
+      .optional()
+      .describe("Disponibilité du candidat, date YYYY-MM-DD (ex: '2026-09-01'). Chaîne vide pour réinitialiser."),
+    mobilityAreas: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Zones de mobilité : libellés OU ids du dictionnaire setting.mobilityArea (hiérarchique régions › villes ; ex: ['Strasbourg','Toute la France']). Remplace la liste existante."
+      ),
+    // --- Administratif / prétentions ---
+    actualSalary: z.number().optional().describe("Salaire annuel actuel (montant)"),
+    desiredSalaryMin: z.number().optional().describe("Salaire annuel souhaité — borne min"),
+    desiredSalaryMax: z.number().optional().describe("Salaire annuel souhaité — borne max"),
+    actualAverageDailyCost: z.number().optional().describe("TJM actuel (montant)"),
+    desiredAverageDailyCostMin: z.number().optional().describe("TJM souhaité — borne min"),
+    desiredAverageDailyCostMax: z.number().optional().describe("TJM souhaité — borne max"),
+    desiredContract: z
+      .string()
+      .optional()
+      .describe(
+        "Contrat souhaité : libellé OU id du dictionnaire setting.typeOf.contract (CDI, CDD, Sous-traitant, Freelance, Stage, Contrat pro, Contrat d'apprentissage)."
+      ),
+    situation: z
+      .string()
+      .optional()
+      .describe(
+        "Situation familiale : libellé OU id du dictionnaire setting.situation (Célibataire, Marié(e), Concubinage, Divorcé(e), Veuf(ve), PACS)."
+      ),
+    nationality: z.string().optional().describe("Nationalité (texte libre, ex: 'France')"),
+    dateOfBirth: z.string().optional().describe("Date de naissance, YYYY-MM-DD"),
+    placeOfBirth: z.string().optional().describe("Lieu de naissance"),
+    healthCareNumber: z.string().optional().describe("N° de sécurité sociale"),
+    administrativeComments: z.string().optional().describe("Commentaires administratifs (texte libre)"),
+  })
+  .strict();
+export type CandidateAdministrativeUpdateInput = z.infer<typeof CandidateAdministrativeUpdateSchema>;
+
 // ---- Resource schemas ----
 
 export const ResourceCreateSchema = z

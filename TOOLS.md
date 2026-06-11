@@ -3,7 +3,7 @@
 > Auto-generated from the server registrations. Do not edit by hand.
 > Regenerate with `npm run docs:tools` (CI fails if this file is stale).
 
-**177 tools** across **38 domains** · **12 prompts** · **21 resources**.
+**179 tools** across **38 domains** · **12 prompts** · **21 resources**.
 
 Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destructiveHint), `idempotent` (idempotentHint), `open-world` (openWorldHint, e.g. paginated keyword search).
 
@@ -71,12 +71,13 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_calendars_get` | Détails d'un calendrier | read · idempotent |
 | `boond_calendars_search` | Rechercher des calendriers | read · idempotent · open-world |
 
-### candidates (12)
+### candidates (13)
 
 | Tool | Title | Hints |
 |---|---|---|
 | `boond_candidates_actions` | Actions liées à un candidat | read · idempotent |
 | `boond_candidates_administrative` | Données administratives d'un candidat | read · idempotent |
+| `boond_candidates_administrative_update` | Modifier disponibilité / mobilité / administratif d'un candidat | write · idempotent |
 | `boond_candidates_create` | Créer un(e) candidat | write |
 | `boond_candidates_delete` | Supprimer un(e) candidat | delete |
 | `boond_candidates_documents` | Lister les pièces jointes d'un candidat | read · idempotent |
@@ -123,12 +124,13 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_contacts_search` | Rechercher des contacts | read · idempotent · open-world |
 | `boond_contacts_update` | Modifier un(e) contact | write · idempotent |
 
-### contracts (2)
+### contracts (3)
 
 | Tool | Title | Hints |
 |---|---|---|
-| `boond_contracts_create` | Créer un contrat | write |
+| `boond_contracts_create` | Créer un contrat de travail | write |
 | `boond_contracts_get` | Détails d'un contrat | read · idempotent |
+| `boond_contracts_update` | Modifier un contrat de travail | write · idempotent |
 
 ### deliveries (2)
 

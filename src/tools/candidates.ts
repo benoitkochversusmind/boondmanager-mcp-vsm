@@ -186,9 +186,9 @@ async function handleCandidateSearch(params: CandidateSearchInput): Promise<{
 // with a POST fallback on 404/405 (the verb is instance-dependent on the
 // external API — mirrors boond_candidates_administrative_update).
 
-const CANDIDATE_UPDATE_DESCRIPTION = `Met à jour la fiche **information** d'un candidat (coordonnées + évaluation). Champs : \`firstName\`, \`lastName\`, \`title\`, \`email1\`/\`email2\`/\`email3\`, \`phone1\`/\`phone2\`/\`phone3\`, \`address\`, \`postcode\`, \`town\` (ville), \`country\`, \`globalEvaluation\` (note entière, -1 = non évaluée), \`informationComments\`.
+const CANDIDATE_UPDATE_DESCRIPTION = `Met à jour la fiche **information** d'un candidat (coordonnées). Champs : \`firstName\`, \`lastName\`, \`title\`, \`email1\`/\`email2\`/\`email3\`, \`phone1\`/\`phone2\`/\`phone3\`, \`address\`, \`postcode\`, \`town\` (ville), \`country\`, \`informationComments\`.
 
-Seuls les champs fournis sont modifiés. Pour la disponibilité, la mobilité, les salaires/TJM, le contrat souhaité ou la situation, utiliser \`boond_candidates_administrative_update\` ; pour le dossier technique, \`boond_candidates_technical_data_update\`.
+Seuls les champs fournis sont modifiés. Pour la disponibilité, la mobilité, les salaires/TJM, le contrat souhaité ou la situation, utiliser \`boond_candidates_administrative_update\` ; pour le dossier technique, \`boond_candidates_technical_data_update\`. L'**évaluation globale** n'est pas modifiable ici : c'est une valeur dérivée des évaluations détaillées du candidat.
 
 Écriture : \`PUT /candidates/{id}/information\` (repli \`POST\` automatique).`;
 

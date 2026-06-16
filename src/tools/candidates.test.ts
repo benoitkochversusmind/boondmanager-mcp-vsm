@@ -275,17 +275,19 @@ describe("boond_candidates_update — information-tab write (v1.20.0)", () => {
       id: "2123",
       town: "Metz",
       postcode: "57000",
-      globalEvaluation: 4,
+      title: "Développeur",
     });
 
     const [path, method, body] = api.mock.calls[0];
     expect(path).toBe("/candidates/2123/information");
     expect(method).toBe("PUT");
     const sent = (body as { data: { attributes: Record<string, unknown> } }).data.attributes;
-    expect(sent).toEqual({ town: "Metz", postcode: "57000", globalEvaluation: 4 });
+    expect(sent).toEqual({ town: "Metz", postcode: "57000", title: "Développeur" });
     // untouched identity fields are NOT sent
     expect(sent).not.toHaveProperty("firstName");
-    expect(applied.sort()).toEqual(["globalEvaluation", "postcode", "town"]);
+    // globalEvaluation is intentionally NOT a writable field (derived value).
+    expect(sent).not.toHaveProperty("globalEvaluation");
+    expect(applied.sort()).toEqual(["postcode", "title", "town"]);
   });
 
   it("falls back to POST on a 405 from PUT", async () => {

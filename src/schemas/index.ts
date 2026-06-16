@@ -516,21 +516,38 @@ export const CandidateCreateSchema = z
   })
   .strict();
 
+// Candidate `information`-tab write fields. These are the *real* attributes of
+// the candidate information sub-resource (verified against the live payload):
+// the previous schema carried `city` / `state` / `mainSkills` / `note`, which
+// are NOT candidate attributes (the address field is `town`, comments are
+// `informationComments`) — they were silently ignored. The write targets
+// `PUT /candidates/{id}/information` (the base `PATCH`/`PUT /candidates/{id}`
+// return 405, like the administrative sub-resource).
 export const CandidateUpdateSchema = z
   .object({
     id: z.string().min(1).describe("ID du candidat à modifier"),
     firstName: z.string().optional().describe("Prénom"),
     lastName: z.string().optional().describe("Nom"),
+    title: z.string().optional().describe("Titre / fonction du candidat"),
     email1: z.string().email().optional().describe("Email principal"),
-    phone1: z.string().optional().describe("Téléphone"),
-    city: z.string().optional().describe("Ville"),
-    country: z.string().optional().describe("Pays"),
-    title: z.string().optional().describe("Titre / fonction"),
-    state: z.number().int().optional().describe("État du candidat"),
-    mainSkills: z.string().optional().describe("Compétences principales"),
-    note: z.string().optional().describe("Notes"),
+    email2: z.string().email().optional().describe("Email secondaire"),
+    email3: z.string().email().optional().describe("Email tertiaire"),
+    phone1: z.string().optional().describe("Téléphone principal"),
+    phone2: z.string().optional().describe("Téléphone secondaire"),
+    phone3: z.string().optional().describe("Téléphone tertiaire"),
+    address: z.string().optional().describe("Adresse postale (rue)"),
+    postcode: z.string().optional().describe("Code postal"),
+    town: z.string().optional().describe("Ville"),
+    country: z.string().optional().describe("Pays (code/identifiant pays BoondManager)"),
+    globalEvaluation: z
+      .number()
+      .int()
+      .optional()
+      .describe("Évaluation globale du candidat (note entière ; -1 = non évaluée)"),
+    informationComments: z.string().optional().describe("Commentaires de la fiche information (texte libre)"),
   })
   .strict();
+export type CandidateUpdateInput = z.infer<typeof CandidateUpdateSchema>;
 
 // ---- Technical-data (Dossier Technique) write schemas (candidate & resource) ----
 // The DT fields are identical for candidates and resources; only the entity-id

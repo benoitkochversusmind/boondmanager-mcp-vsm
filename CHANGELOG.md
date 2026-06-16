@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.20.0] - 2026-06-16
+
+### Corrigé
+
+- **`boond_candidates_update` était inopérant** — il passait par le factory CRUD générique en `PATCH /candidates/{id}`, verbe **rejeté par l'API (405)**, comme pour l'administratif. L'outil est réimplémenté pour écrire la **fiche information** du candidat via **`PUT /candidates/{id}/information`** (repli automatique **POST** sur 404/405). Seuls les champs fournis sont envoyés.
+
+### Modifié
+
+- **Schéma `boond_candidates_update` aligné sur les vrais attributs de l'onglet information.** Ajout des champs jusqu'ici non couverts : **`postcode`**, **`town`** (ville), **`globalEvaluation`** (évaluation globale, note entière, -1 = non évaluée), ainsi que `address`, `email2`/`email3`, `phone2`/`phone3`, `informationComments`. Retrait des champs qui **n'étaient pas** des attributs candidat et étaient silencieusement ignorés (`city` → remplacé par `town`, `state`, `mainSkills`, `note` → `informationComments`). Pour la disponibilité/mobilité/salaires/contrat souhaité, voir `boond_candidates_administrative_update`.
+
 ## [1.19.0] - 2026-06-11
 
 ### Ajouté

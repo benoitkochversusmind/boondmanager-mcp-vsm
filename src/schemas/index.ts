@@ -523,6 +523,11 @@ export const CandidateCreateSchema = z
 // `informationComments`) — they were silently ignored. The write targets
 // `PUT /candidates/{id}/information` (the base `PATCH`/`PUT /candidates/{id}`
 // return 405, like the administrative sub-resource).
+//
+// NOT writable here (intentionally excluded): `globalEvaluation`. Prod test
+// (v1.20.0) showed the PUT echoes it in the response but never persists it — it
+// is a *derived* value computed from the detailed `evaluations` entries, not a
+// directly settable field. Exposing it would return a false ✅ success.
 export const CandidateUpdateSchema = z
   .object({
     id: z.string().min(1).describe("ID du candidat à modifier"),
@@ -539,11 +544,6 @@ export const CandidateUpdateSchema = z
     postcode: z.string().optional().describe("Code postal"),
     town: z.string().optional().describe("Ville"),
     country: z.string().optional().describe("Pays (code/identifiant pays BoondManager)"),
-    globalEvaluation: z
-      .number()
-      .int()
-      .optional()
-      .describe("Évaluation globale du candidat (note entière ; -1 = non évaluée)"),
     informationComments: z.string().optional().describe("Commentaires de la fiche information (texte libre)"),
   })
   .strict();

@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.20.1] - 2026-06-16
+
+### Corrigé
+
+- **`boond_candidates_update` : retrait de `globalEvaluation`** — le test prod a montré que le `PUT /candidates/{id}/information` **renvoie** le champ dans sa réponse mais ne le **persiste pas** : l'évaluation globale est une valeur **dérivée** des évaluations détaillées du candidat (`evaluations`), pas un attribut directement modifiable. L'exposer renvoyait un faux ✅ succès. Le champ est retiré du périmètre modifiable ; les autres champs de la fiche information (coordonnées, `postcode`, `town`, `informationComments`…) restent fonctionnels (confirmés en prod).
+
 ## [1.20.0] - 2026-06-16
 
 ### Corrigé

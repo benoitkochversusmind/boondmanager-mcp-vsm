@@ -87,7 +87,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_candidates_search` | Rechercher des candidats | read · idempotent · open-world |
 | `boond_candidates_technical_data` | Compétences techniques d'un candidat | read · idempotent |
 | `boond_candidates_technical_data_update` | Modifier le dossier technique d'un candidat | write |
-| `boond_candidates_update` | Modifier un(e) candidat | write · idempotent |
+| `boond_candidates_update` | Modifier la fiche information d'un candidat | write · idempotent |
 
 ### companies (14)
 

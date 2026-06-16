@@ -1,15 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CandidateCreateSchema, CandidateUpdateSchema, CandidateSearchSchema, IdSchema } from "../schemas/index.js";
-import type { CandidateSearchInput } from "../schemas/index.js";
+import type { CandidateSearchInput, CandidateUpdateInput } from "../schemas/index.js";
 import {
   registerGetToolMerged,
   registerCreateTool,
-  registerUpdateTool,
   registerDeleteTool,
   buildJsonApiBody,
   buildTabHandler,
 } from "./crud-factory.js";
-import { apiRequest, buildSearchQuery, formatListResponse } from "../services/boond-client.js";
+import { apiRequest, buildSearchQuery, formatListResponse, formatDetailResponse } from "../services/boond-client.js";
 import { getStateMap } from "../services/dictionary.js";
 import type { JsonApiResource, JsonApiResponse } from "../types.js";
 
@@ -178,6 +177,61 @@ async function handleCandidateSearch(params: CandidateSearchInput): Promise<{
   };
 }
 
+// ---- Candidate `information`-tab write (boond_candidates_update) -------------
+//
+// The generic CRUD update did `PATCH /candidates/{id}` → 405 (verified in prod,
+// same as the administrative tab). The candidate is split into sub-resources and
+// the editable identity/contact fields (incl. postcode, town, globalEvaluation)
+// live on `information`, so the write goes to `PUT /candidates/{id}/information`
+// with a POST fallback on 404/405 (the verb is instance-dependent on the
+// external API — mirrors boond_candidates_administrative_update).
+
+const CANDIDATE_UPDATE_DESCRIPTION = `Met à jour la fiche **information** d'un candidat (coordonnées + évaluation). Champs : \`firstName\`, \`lastName\`, \`title\`, \`email1\`/\`email2\`/\`email3\`, \`phone1\`/\`phone2\`/\`phone3\`, \`address\`, \`postcode\`, \`town\` (ville), \`country\`, \`globalEvaluation\` (note entière, -1 = non évaluée), \`informationComments\`.
+
+Seuls les champs fournis sont modifiés. Pour la disponibilité, la mobilité, les salaires/TJM, le contrat souhaité ou la situation, utiliser \`boond_candidates_administrative_update\` ; pour le dossier technique, \`boond_candidates_technical_data_update\`.
+
+Écriture : \`PUT /candidates/{id}/information\` (repli \`POST\` automatique).`;
+
+/**
+ * Write candidate `information`-tab fields. Only the provided keys are sent.
+ * Targets the `information` sub-resource (the base `PATCH`/`PUT /candidates/{id}`
+ * return 405); falls back to POST on a 404/405 verb/endpoint mismatch. Throws
+ * when no field is provided (no empty write).
+ */
+export async function updateCandidateInformation(
+  input: CandidateUpdateInput
+): Promise<{ response: JsonApiResponse; applied: string[] }> {
+  const { id, ...fields } = input;
+  const attrs: Record<string, unknown> = {};
+  const applied: string[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) {
+      attrs[key] = value;
+      applied.push(key);
+    }
+  }
+  if (applied.length === 0) {
+    throw new Error(
+      "Rien à mettre à jour : fournir au moins un champ (firstName, town, postcode, globalEvaluation, …)."
+    );
+  }
+
+  const infoPath = `/candidates/${id}/information`;
+  const body = buildJsonApiBody("candidate", attrs, id);
+  let response: JsonApiResponse;
+  try {
+    response = await apiRequest(infoPath, "PUT", body);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/\b40[45]\b/.test(msg)) {
+      response = await apiRequest(infoPath, "POST", body);
+    } else {
+      throw err;
+    }
+  }
+  return { response, applied };
+}
+
 export function registerCandidateTools(server: McpServer): void {
   server.registerTool(
     `${OPTS.prefix}_search`,
@@ -201,10 +255,31 @@ export function registerCandidateTools(server: McpServer): void {
     return buildJsonApiBody("candidate", attrs);
   });
 
-  registerUpdateTool(server, OPTS, CandidateUpdateSchema, (params) => {
-    const { id, ...attrs } = params;
-    return buildJsonApiBody("candidate", attrs, id as string);
-  });
+  server.registerTool(
+    `${OPTS.prefix}_update`,
+    {
+      title: "Modifier la fiche information d'un candidat",
+      description: CANDIDATE_UPDATE_DESCRIPTION,
+      inputSchema: CandidateUpdateSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (params) => {
+      const input = params as CandidateUpdateInput;
+      try {
+        const { response, applied } = await updateCandidateInformation(input);
+        const text = [
+          `✅ Candidat #${input.id} mis à jour.`,
+          `   Champs : ${applied.join(", ")}`,
+          "",
+          formatDetailResponse(response),
+        ].join("\n");
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: message }], isError: true };
+      }
+    }
+  );
 
   registerDeleteTool(server, OPTS);
 

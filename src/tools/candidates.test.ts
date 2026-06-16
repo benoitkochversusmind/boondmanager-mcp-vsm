@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerCandidateTools } from "./candidates.js";
+import { registerCandidateTools, updateCandidateInformation } from "./candidates.js";
 import * as boondClient from "../services/boond-client.js";
 import * as dictionaryService from "../services/dictionary.js";
 import type { JsonApiResponse } from "../types.js";
@@ -254,5 +254,61 @@ describe("boond_candidates_search — stateLabel + fetchAll (v1.10.0)", () => {
     // The formatter shows the merged rows; the meta total stays 5000 (server-side
     // count). The cap limits what we surface, not what BoondManager has.
     expect(result.content[0].text).toMatch(/Total: 5000 candidat\(s\)/);
+  });
+});
+
+describe("boond_candidates_update — information-tab write (v1.20.0)", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  function echoApi() {
+    return vi
+      .spyOn(boondClient, "apiRequest")
+      .mockImplementation(async (path: string, _method: string, body?: unknown) => {
+        const attrs = (body as { data?: { attributes?: unknown } } | undefined)?.data?.attributes ?? {};
+        return { data: { type: "candidate", id: "2123", attributes: attrs } } as never;
+      });
+  }
+
+  it("writes only the provided fields to PUT /candidates/{id}/information", async () => {
+    const api = echoApi();
+    const { applied } = await updateCandidateInformation({
+      id: "2123",
+      town: "Metz",
+      postcode: "57000",
+      globalEvaluation: 4,
+    });
+
+    const [path, method, body] = api.mock.calls[0];
+    expect(path).toBe("/candidates/2123/information");
+    expect(method).toBe("PUT");
+    const sent = (body as { data: { attributes: Record<string, unknown> } }).data.attributes;
+    expect(sent).toEqual({ town: "Metz", postcode: "57000", globalEvaluation: 4 });
+    // untouched identity fields are NOT sent
+    expect(sent).not.toHaveProperty("firstName");
+    expect(applied.sort()).toEqual(["globalEvaluation", "postcode", "town"]);
+  });
+
+  it("falls back to POST on a 405 from PUT", async () => {
+    const api = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (_path: string, method: string) => {
+      if (method === "PUT") throw new Error("BoondManager API error 405: Method Not Allowed");
+      return { data: { type: "candidate", id: "2123", attributes: {} } } as never;
+    });
+    await updateCandidateInformation({ id: "2123", town: "Nancy" });
+    const methods = api.mock.calls.map((c) => c[1]);
+    expect(methods).toEqual(["PUT", "POST"]);
+  });
+
+  it("throws (no write) when no field is provided", async () => {
+    const api = echoApi();
+    await expect(updateCandidateInformation({ id: "2123" })).rejects.toThrow(/Rien à mettre à jour/);
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("is exposed as boond_candidates_update and is not read-only", () => {
+    const server = createServer();
+    registerCandidateTools(server);
+    const call = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_candidates_update");
+    expect(call).toBeDefined();
+    expect(call![1].annotations?.readOnlyHint).toBe(false);
   });
 });

@@ -524,10 +524,12 @@ export const CandidateCreateSchema = z
 // `PUT /candidates/{id}/information` (the base `PATCH`/`PUT /candidates/{id}`
 // return 405, like the administrative sub-resource).
 //
-// NOT writable here (intentionally excluded): `globalEvaluation`. Prod test
-// (v1.20.0) showed the PUT echoes it in the response but never persists it — it
-// is a *derived* value computed from the detailed `evaluations` entries, not a
-// directly settable field. Exposing it would return a false ✅ success.
+// `globalEvaluation` is a *dictionary-coded* field (DB column PROFIL_STATUT →
+// `setting.evaluation`, e.g. A/B/C/D ; `-1` = non évaluée), NOT a derived value.
+// The first prod test (v1.20.0) sent the raw integer `4`, which is not a valid
+// `setting.evaluation` id, so BoondManager echoed it but never stored it. The
+// tool now resolves the input against the dictionary (label OR id) and blocks
+// on an unresolved value — no more false success. See updateCandidateInformation.
 export const CandidateUpdateSchema = z
   .object({
     id: z.string().min(1).describe("ID du candidat à modifier"),
@@ -544,6 +546,12 @@ export const CandidateUpdateSchema = z
     postcode: z.string().optional().describe("Code postal"),
     town: z.string().optional().describe("Ville"),
     country: z.string().optional().describe("Pays (code/identifiant pays BoondManager)"),
+    globalEvaluation: z
+      .string()
+      .optional()
+      .describe(
+        "Évaluation globale : libellé OU id du dictionnaire setting.evaluation (ex: 'A', 'B', 'C', 'D'). '-1' (ou chaîne vide) = non évaluée. Résolu vs le dictionnaire ; valeur invalide = erreur bloquante."
+      ),
     informationComments: z.string().optional().describe("Commentaires de la fiche information (texte libre)"),
   })
   .strict();

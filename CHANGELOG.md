@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.20.2] - 2026-06-16
+
+### Ajouté
+
+- **`boond_candidates_update` : `globalEvaluation` redevient modifiable, correctement.** Le diagnostic 1.20.1 (« valeur dérivée ») était faux : la doc BDD (colonne `PROFIL_STATUT`) et le dictionnaire live montrent que c'est un champ **codé par `setting.evaluation`** (ex: `A`/`B`/`C`/`D`, `-1` = non évaluée). Le premier test (v1.20.0) envoyait l'entier `4`, **id invalide** → BoondManager l'echoait mais ne le stockait pas (faux succès). Le champ est désormais **résolu via le dictionnaire `setting.evaluation`** (libellé OU id, insensible casse/accents) ; `-1`/chaîne vide = réinitialisation ; **valeur invalide = erreur bloquante, sans écriture**.
+
 ## [1.20.1] - 2026-06-16
 
 ### Corrigé

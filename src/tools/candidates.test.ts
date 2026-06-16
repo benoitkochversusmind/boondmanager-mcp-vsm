@@ -313,4 +313,50 @@ describe("boond_candidates_update — information-tab write (v1.20.0)", () => {
     expect(call).toBeDefined();
     expect(call![1].annotations?.readOnlyHint).toBe(false);
   });
+
+  // ---- globalEvaluation resolution (v1.20.2) ----
+  const EVAL_DICT = {
+    payload: {
+      data: {
+        setting: {
+          evaluation: [
+            { id: "A", value: "A", isEnabled: true },
+            { id: "B", value: "B", isEnabled: true },
+            { id: "C", value: "C", isEnabled: true },
+            { id: "D", value: "D", isEnabled: true },
+          ],
+        },
+      },
+    },
+    fetchedAt: 0,
+    language: "fr",
+  } as never;
+
+  it("resolves globalEvaluation against setting.evaluation and writes the id", async () => {
+    vi.spyOn(dictionaryService, "getDictionary").mockResolvedValue(EVAL_DICT);
+    const api = echoApi();
+    await updateCandidateInformation({ id: "2123", globalEvaluation: "b" }); // lowercase label
+
+    const sent = (api.mock.calls[0][2] as { data: { attributes: Record<string, unknown> } }).data.attributes;
+    expect(sent).toEqual({ globalEvaluation: "B" });
+  });
+
+  it("treats -1 (and empty) as reset without needing the dictionary", async () => {
+    const dictSpy = vi.spyOn(dictionaryService, "getDictionary");
+    const api = echoApi();
+    await updateCandidateInformation({ id: "2123", globalEvaluation: "-1" });
+
+    const sent = (api.mock.calls[0][2] as { data: { attributes: Record<string, unknown> } }).data.attributes;
+    expect(sent).toEqual({ globalEvaluation: "-1" });
+    expect(dictSpy).not.toHaveBeenCalled(); // short-circuits the reset
+  });
+
+  it("throws (no write) on an evaluation value absent from the dictionary", async () => {
+    vi.spyOn(dictionaryService, "getDictionary").mockResolvedValue(EVAL_DICT);
+    const api = echoApi();
+    await expect(updateCandidateInformation({ id: "2123", globalEvaluation: "4" })).rejects.toThrow(
+      /globalEvaluation "4" non résolu/
+    );
+    expect(api).not.toHaveBeenCalled(); // resolution happens before any write
+  });
 });

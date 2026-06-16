@@ -9,7 +9,7 @@ import {
   buildTabHandler,
 } from "./crud-factory.js";
 import { apiRequest, buildSearchQuery, formatListResponse, formatDetailResponse } from "../services/boond-client.js";
-import { getStateMap } from "../services/dictionary.js";
+import { getStateMap, getDictionary, resolveDictionaryPath } from "../services/dictionary.js";
 import type { JsonApiResource, JsonApiResponse } from "../types.js";
 
 const OPTS = {
@@ -186,22 +186,63 @@ async function handleCandidateSearch(params: CandidateSearchInput): Promise<{
 // with a POST fallback on 404/405 (the verb is instance-dependent on the
 // external API — mirrors boond_candidates_administrative_update).
 
-const CANDIDATE_UPDATE_DESCRIPTION = `Met à jour la fiche **information** d'un candidat (coordonnées). Champs : \`firstName\`, \`lastName\`, \`title\`, \`email1\`/\`email2\`/\`email3\`, \`phone1\`/\`phone2\`/\`phone3\`, \`address\`, \`postcode\`, \`town\` (ville), \`country\`, \`informationComments\`.
+const CANDIDATE_UPDATE_DESCRIPTION = `Met à jour la fiche **information** d'un candidat (coordonnées + évaluation globale). Champs : \`firstName\`, \`lastName\`, \`title\`, \`email1\`/\`email2\`/\`email3\`, \`phone1\`/\`phone2\`/\`phone3\`, \`address\`, \`postcode\`, \`town\` (ville), \`country\`, \`globalEvaluation\` (libellé/id \`setting.evaluation\`, ex: 'A'/'B'/'C'/'D' ; '-1' = non évaluée), \`informationComments\`.
 
-Seuls les champs fournis sont modifiés. Pour la disponibilité, la mobilité, les salaires/TJM, le contrat souhaité ou la situation, utiliser \`boond_candidates_administrative_update\` ; pour le dossier technique, \`boond_candidates_technical_data_update\`. L'**évaluation globale** n'est pas modifiable ici : c'est une valeur dérivée des évaluations détaillées du candidat.
+Seuls les champs fournis sont modifiés. \`globalEvaluation\` est résolu via le dictionnaire \`setting.evaluation\` (libellé OU id) ; une valeur invalide est une **erreur bloquante** (pas de faux succès). Pour la disponibilité, la mobilité, les salaires/TJM, le contrat souhaité ou la situation, utiliser \`boond_candidates_administrative_update\` ; pour le dossier technique, \`boond_candidates_technical_data_update\`.
 
 Écriture : \`PUT /candidates/{id}/information\` (repli \`POST\` automatique).`;
 
+/** Accent/case-insensitive normalisation for dictionary label/id matching. */
+function normEval(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Resolve a `globalEvaluation` input (label OR id) to a canonical
+ * `setting.evaluation` id. `""`/`"-1"` resets to "non évaluée" (-1). Throws on
+ * an unresolved value — BoondManager silently drops an invalid evaluation id
+ * (e.g. the integer `4`), which would otherwise read as a false success.
+ */
+async function resolveGlobalEvaluation(raw: string): Promise<string> {
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed === "-1") return "-1";
+  const dict = await getDictionary();
+  const entries = (resolveDictionaryPath(dict.payload, "setting.evaluation") ?? []) as Array<{
+    id?: string | number;
+    value?: string;
+    isEnabled?: boolean;
+  }>;
+  const target = normEval(trimmed);
+  for (const e of entries) {
+    if (!e || e.isEnabled === false || e.id === undefined || e.id === null) continue;
+    if (normEval(String(e.id)) === target || (typeof e.value === "string" && normEval(e.value) === target)) {
+      return String(e.id);
+    }
+  }
+  const valid = entries
+    .filter((e) => e && e.isEnabled !== false && e.id !== undefined && e.id !== null)
+    .map((e) => String(e.id))
+    .join(", ");
+  throw new Error(
+    `globalEvaluation "${raw}" non résolu — aucune écriture. Valeurs valides (dictionnaire setting.evaluation) : ${valid || "(aucune)"} ; ou "-1" pour non évaluée.`
+  );
+}
+
 /**
  * Write candidate `information`-tab fields. Only the provided keys are sent.
- * Targets the `information` sub-resource (the base `PATCH`/`PUT /candidates/{id}`
- * return 405); falls back to POST on a 404/405 verb/endpoint mismatch. Throws
- * when no field is provided (no empty write).
+ * `globalEvaluation` is resolved against `setting.evaluation` (blocking on an
+ * invalid value). Targets the `information` sub-resource (the base
+ * `PATCH`/`PUT /candidates/{id}` return 405); falls back to POST on a 404/405
+ * verb/endpoint mismatch. Throws when no field is provided (no empty write).
  */
 export async function updateCandidateInformation(
   input: CandidateUpdateInput
 ): Promise<{ response: JsonApiResponse; applied: string[] }> {
-  const { id, ...fields } = input;
+  const { id, globalEvaluation, ...fields } = input;
   const attrs: Record<string, unknown> = {};
   const applied: string[] = [];
   for (const [key, value] of Object.entries(fields)) {
@@ -209,6 +250,11 @@ export async function updateCandidateInformation(
       attrs[key] = value;
       applied.push(key);
     }
+  }
+  // Resolve the dictionary-coded evaluation before any write (throws on invalid).
+  if (globalEvaluation !== undefined) {
+    attrs.globalEvaluation = await resolveGlobalEvaluation(globalEvaluation);
+    applied.push("globalEvaluation");
   }
   if (applied.length === 0) {
     throw new Error(

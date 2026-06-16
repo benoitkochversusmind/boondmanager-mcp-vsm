@@ -7,6 +7,7 @@ import {
   registerCandidateTechnicalDataTools,
   registerCandidateAdministrativeTools,
   registerResourceTools,
+  registerResourceTechnicalDataTools,
   registerContactTools,
   registerCompanyTools,
   registerOpportunityTools,
@@ -124,6 +125,7 @@ export function createMcpServer(): McpServer {
   registerCandidateTechnicalDataTools(server);
   registerCandidateAdministrativeTools(server);
   registerResourceTools(server);
+  registerResourceTechnicalDataTools(server);
   registerContactTools(server);
   registerCompanyTools(server);
   registerOpportunityTools(server);

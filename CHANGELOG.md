@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.19.0] - 2026-06-11
+
+### Ajouté
+
+- **`boond_resources_technical_data_update`** — écriture du Dossier Technique des **ressources** (collaborateurs), jusqu'ici possible uniquement pour les candidats. Mêmes champs et garde-fous que la version candidat (outils + niveaux, domaines, secteurs S1–S12, compétences, expérience, langues CEFR, merge/replace). Le serveur expose **180 outils**.
+
+### Modifié
+
+- **Cœur DT factorisé** : `updateCandidateTechnicalData` et `updateResourceTechnicalData` partagent une seule logique paramétrée par l'entité parente. Seule la résolution du `tdId` diffère (`/candidates/{id}/technical-data` vs `/resources/{id}/technical-data`) ; l'écriture cible le même endpoint partagé `PUT /technical-datas/{tdId}`. Le schéma DT (champs + descriptions) est mutualisé entre les deux outils.
+
 ## [1.18.2] - 2026-06-11
 
 ### Corrigé

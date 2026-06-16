@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerCandidateTechnicalDataTools, updateCandidateTechnicalData } from "./candidates-technical-data.js";
+import {
+  registerCandidateTechnicalDataTools,
+  registerResourceTechnicalDataTools,
+  updateCandidateTechnicalData,
+  updateResourceTechnicalData,
+} from "./candidates-technical-data.js";
 import * as dictionary from "../services/dictionary.js";
 import * as boondClient from "../services/boond-client.js";
 
@@ -407,6 +412,54 @@ describe("updateCandidateTechnicalData — guards", () => {
       throw new Error(`unexpected ${method} ${path}`);
     });
     await expect(updateCandidateTechnicalData({ candidateId: "29514", tools: ["C#"] })).rejects.toThrow(/tdId/);
+  });
+});
+
+describe("updateResourceTechnicalData — same logic, resource lookup path", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("resolves the tdId via /resources/{id}/technical-data, then PUTs the shared /technical-datas/{tdId}", async () => {
+    mockDictionary();
+    const api = mockApi({ tools: [] });
+    await updateResourceTechnicalData({
+      resourceId: "113",
+      tools: ["C#"],
+      expertiseAreas: ["Banque [S1]"],
+      mode: "merge",
+    });
+
+    // tdId lookup hits the RESOURCE path, not /candidates
+    const lookup = api.mock.calls.find((c) => c[1] === "GET" && String(c[0]).endsWith("/technical-data"));
+    expect(lookup![0]).toBe("/resources/113/technical-data");
+    // the write targets the shared technical-datas endpoint
+    const [path, method] = api.mock.calls.find((c) => c[1] === "PUT")!;
+    expect(path).toBe("/technical-datas/29489");
+    expect(method).toBe("PUT");
+    expect(putAttrs(api)["tools"]).toEqual([{ tool: "1", level: 0 }]);
+    expect(putAttrs(api)["expertiseAreas"]).toEqual(["100"]);
+  });
+
+  it("blocks on an unresolved label (no write), like the candidate tool", async () => {
+    mockDictionary();
+    const api = mockApi({ tools: [] });
+    await expect(updateResourceTechnicalData({ resourceId: "113", tools: ["InconnuXYZ"] })).rejects.toThrow(
+      /InconnuXYZ/
+    );
+    expect(api).not.toHaveBeenCalled();
+  });
+});
+
+describe("registerResourceTechnicalDataTools", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("registers boond_resources_technical_data_update as a write tool", () => {
+    const server = { registerTool: vi.fn() } as unknown as McpServer;
+    registerResourceTechnicalDataTools(server);
+    const call = vi
+      .mocked(server.registerTool)
+      .mock.calls.find((c) => c[0] === "boond_resources_technical_data_update");
+    expect(call).toBeTruthy();
+    expect(call![1].annotations?.readOnlyHint).toBe(false);
   });
 });
 

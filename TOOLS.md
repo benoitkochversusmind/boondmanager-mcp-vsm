@@ -3,7 +3,7 @@
 > Auto-generated from the server registrations. Do not edit by hand.
 > Regenerate with `npm run docs:tools` (CI fails if this file is stale).
 
-**179 tools** across **38 domains** · **12 prompts** · **21 resources**.
+**180 tools** across **38 domains** · **12 prompts** · **21 resources**.
 
 Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destructiveHint), `idempotent` (idempotentHint), `open-world` (openWorldHint, e.g. paginated keyword search).
 
@@ -296,7 +296,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_reporting_resources` | Reporting ressources | read · idempotent · open-world |
 | `boond_reporting_synthesis` | Reporting synthèse | read · idempotent · open-world |
 
-### resources (18)
+### resources (19)
 
 | Tool | Title | Hints |
 |---|---|---|
@@ -315,6 +315,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_resources_projects` | Projets d'une ressource | read · idempotent |
 | `boond_resources_search` | Rechercher des ressources | read · idempotent · open-world |
 | `boond_resources_technical_data` | Compétences techniques d'une ressource | read · idempotent |
+| `boond_resources_technical_data_update` | Modifier le dossier technique d'une ressource | write |
 | `boond_resources_times_reports` | Feuilles de temps d'une ressource | read · idempotent |
 | `boond_resources_timesheets` | Feuilles de temps d'une ressource | read · idempotent |
 | `boond_resources_update` | Modifier un(e) ressource | write · idempotent |

@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { CandidateTechnicalDataUpdateSchema } from "../schemas/index.js";
-import type { CandidateTechnicalDataUpdateInput } from "../schemas/index.js";
+import { CandidateTechnicalDataUpdateSchema, ResourceTechnicalDataUpdateSchema } from "../schemas/index.js";
+import type { CandidateTechnicalDataUpdateInput, ResourceTechnicalDataUpdateInput } from "../schemas/index.js";
 import { apiRequest, formatDetailResponse } from "../services/boond-client.js";
 import { buildJsonApiBody } from "./crud-factory.js";
 import { getDictionary, resolveDictionaryPath } from "../services/dictionary.js";
@@ -195,13 +195,39 @@ export interface TechnicalDataUpdateResult {
   applied: string[];
 }
 
-/**
- * Core, reusable logic. Resolves labels → ids, reads the current DT, applies
- * merge/replace, and PUTs `/technical-datas/{tdId}`. Throws on any unresolved
- * label (with the explicit list) before performing any write.
- */
+/** The DT fields shared by candidates and resources (everything but the entity id). */
+type TechnicalDataFields = Omit<CandidateTechnicalDataUpdateInput, "candidateId">;
+
+/** Parent entity carrying the DT — only the tdId-lookup path/label differs. */
+interface TechnicalDataParent {
+  apiPath: "candidates" | "resources";
+  label: string;
+  id: string;
+}
+
+/** Candidate wrapper — resolves the tdId via /candidates/{id}/technical-data. */
 export async function updateCandidateTechnicalData(
   input: CandidateTechnicalDataUpdateInput
+): Promise<TechnicalDataUpdateResult> {
+  return updateEntityTechnicalData({ apiPath: "candidates", label: "candidat", id: input.candidateId }, input);
+}
+
+/** Resource wrapper — resolves the tdId via /resources/{id}/technical-data. */
+export async function updateResourceTechnicalData(
+  input: ResourceTechnicalDataUpdateInput
+): Promise<TechnicalDataUpdateResult> {
+  return updateEntityTechnicalData({ apiPath: "resources", label: "ressource", id: input.resourceId }, input);
+}
+
+/**
+ * Core, reusable logic. Resolves labels → ids, reads the current DT, applies
+ * merge/replace, and PUTs the shared `/technical-datas/{tdId}` endpoint. Throws
+ * on any unresolved label (with the explicit list) before performing any write.
+ * Only the tdId lookup depends on the parent entity (candidate vs resource).
+ */
+async function updateEntityTechnicalData(
+  parent: TechnicalDataParent,
+  input: TechnicalDataFields
 ): Promise<TechnicalDataUpdateResult> {
   const mode = input.mode ?? "merge";
 
@@ -286,12 +312,14 @@ export async function updateCandidateTechnicalData(
     );
   }
 
-  // 3. Resolve tdId, then read the current DT (for merge union + element-shape detection).
-  const tdLookup = await apiRequest(`/candidates/${input.candidateId}/technical-data`, "GET");
+  // 3. Resolve tdId via the parent's technical-data tab, then read the current DT
+  //    (for merge union + element-shape detection). The tdId lookup is the ONLY
+  //    parent-dependent step — the write below targets the shared /technical-datas.
+  const tdLookup = await apiRequest(`/${parent.apiPath}/${parent.id}/technical-data`, "GET");
   const tdEntity = Array.isArray(tdLookup.data) ? tdLookup.data[0] : tdLookup.data;
   const tdId = (tdEntity?.attributes as Record<string, unknown> | undefined)?.["tdId"];
   if (tdId === undefined || tdId === null) {
-    throw new Error(`Dossier technique introuvable pour le candidat #${input.candidateId} (attribut tdId absent).`);
+    throw new Error(`Dossier technique introuvable pour ${parent.label} #${parent.id} (attribut tdId absent).`);
   }
   const tdIdStr = String(tdId);
 
@@ -337,18 +365,18 @@ export async function updateCandidateTechnicalData(
     );
   }
 
-  // 5. PUT /technical-datas/{tdId} (recommended endpoint).
+  // 5. PUT the shared /technical-datas/{tdId} endpoint (same for candidate & resource).
   const body = buildJsonApiBody("technicaldata", attrs, tdIdStr);
   const response = await apiRequest(`/technical-datas/${tdIdStr}`, "PUT", body);
-  // Deprecated fallback (kept for reference; do not use unless /technical-datas is unavailable):
-  //   const response = await apiRequest(`/candidates/${input.candidateId}/technical-data`, "PUT", body);
   return { response, tdId: tdIdStr, applied };
 }
 
-const TECHNICAL_DATA_UPDATE_DESCRIPTION = `Met à jour le Dossier Technique (DT) d'un candidat : compétences/outils, domaines, secteurs, expérience, langues.
+/** Build the (identical-but-for-the-entity) tool description. */
+function technicalDataDescription(entityLabel: string, idField: string, apiPath: string): string {
+  return `Met à jour le Dossier Technique (DT) d'un(e) ${entityLabel} : compétences/outils, domaines, secteurs, expérience, langues.
 
 Paramètres :
-- \`candidateId\` (requis) : ID du candidat.
+- \`${idField}\` (requis) : ID du/de la ${entityLabel}.
 - \`tools\` (string[]) : outils/technos, format \`"<outil>"\` ou \`"<outil>|<niveau>"\`. Outil = libellé OU id de \`setting.tool\`. Le libellé doit matcher la **value exacte** du dictionnaire (« C# » seul NE résout PAS → « .Net: C# » ou l'id « csharp »). Niveau = entier 0–5 (0 = non évalué, défaut si absent). Ex: ["Cloud: AWS|2", "React"].
 - \`activityAreas\` (string[]) : domaines (\`setting.activityArea\`, hiérarchique — feuilles « Profils »/« Certifications »).
 - \`expertiseAreas\` (string[]) : secteurs, **restreints au jeu codifié S1–S12** (\`setting.expertiseArea\` dont la value contient [S1]…[S12]). Une valeur hors S1–S12 est rejetée.
@@ -357,31 +385,61 @@ Paramètres :
 - \`languages\` (string[]) : format \`"<langue>|<niveau>"\`. Langue = libellé/id de \`setting.languageSpoken\`. Niveau = CEFR via \`setting.languageLevel\` : "A1","A2","B1","B2","C1","C2" (ou la value "B1 - Indépendant-"). Ex: ["Anglais|B2"]. En merge, le niveau d'une langue déjà présente est écrasé.
 - \`mode\` : \`merge\` (défaut, union sans doublon ; dédoublonnage par outil/langue) ou \`replace\` (remplace les seuls champs fournis).
 
-Résolution libellé→id insensible casse/accents (match id exact OU value). **Tout libellé non résolu est une erreur bloquante** (aucune écriture partielle ; liste des libellés en échec). Stratégie read-modify-write : lecture du tdId via /candidates/{id}/technical-data, lecture du DT courant, fusion/remplacement, PUT /technical-datas/{tdId}.
+Résolution libellé→id insensible casse/accents (match id exact OU value). **Tout libellé non résolu est une erreur bloquante** (aucune écriture partielle ; liste des libellés en échec). Stratégie read-modify-write : lecture du tdId via /${apiPath}/{id}/technical-data, lecture du DT courant, fusion/remplacement, PUT /technical-datas/{tdId}.
 
 Returns : confirmation + payload mis à jour.`;
+}
+
+const DT_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
 
 export function registerCandidateTechnicalDataTools(server: McpServer): void {
   server.registerTool(
     "boond_candidates_technical_data_update",
     {
       title: "Modifier le dossier technique d'un candidat",
-      description: TECHNICAL_DATA_UPDATE_DESCRIPTION,
+      description: technicalDataDescription("candidat", "candidateId", "candidates"),
       inputSchema: CandidateTechnicalDataUpdateSchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
+      annotations: DT_ANNOTATIONS,
     },
     async (params) => {
       try {
-        const { response, tdId, applied } = await updateCandidateTechnicalData(
-          params as CandidateTechnicalDataUpdateInput
-        );
+        const p = params as CandidateTechnicalDataUpdateInput;
+        const { response, tdId, applied } = await updateCandidateTechnicalData(p);
         const text = [
-          `✅ Dossier technique du candidat #${(params as CandidateTechnicalDataUpdateInput).candidateId} mis à jour (tdId ${tdId}).`,
+          `✅ Dossier technique du candidat #${p.candidateId} mis à jour (tdId ${tdId}).`,
+          `   Champs : ${applied.join(", ") || "(aucun)"}`,
+          "",
+          formatDetailResponse(response),
+        ].join("\n");
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: message }], isError: true };
+      }
+    }
+  );
+}
+
+export function registerResourceTechnicalDataTools(server: McpServer): void {
+  server.registerTool(
+    "boond_resources_technical_data_update",
+    {
+      title: "Modifier le dossier technique d'une ressource",
+      description: technicalDataDescription("ressource", "resourceId", "resources"),
+      inputSchema: ResourceTechnicalDataUpdateSchema,
+      annotations: DT_ANNOTATIONS,
+    },
+    async (params) => {
+      try {
+        const p = params as ResourceTechnicalDataUpdateInput;
+        const { response, tdId, applied } = await updateResourceTechnicalData(p);
+        const text = [
+          `✅ Dossier technique de la ressource #${p.resourceId} mis à jour (tdId ${tdId}).`,
           `   Champs : ${applied.join(", ") || "(aucun)"}`,
           "",
           formatDetailResponse(response),

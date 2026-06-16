@@ -532,44 +532,63 @@ export const CandidateUpdateSchema = z
   })
   .strict();
 
-// ---- Candidate technical-data (Dossier Technique) write schema ----
+// ---- Technical-data (Dossier Technique) write schemas (candidate & resource) ----
+// The DT fields are identical for candidates and resources; only the entity-id
+// param differs. The shared shape is spread into both schemas. The actual write
+// targets the shared `/technical-datas/{tdId}` endpoint (tdId resolved from the
+// parent's `/{candidates|resources}/{id}/technical-data`).
+
+const technicalDataFields = {
+  tools: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Outils / technos, format '<outil>' ou '<outil>|<niveau>'. Outil = libellé OU id setting.tool. Niveau = entier 0–5 (0 = non évalué, défaut si absent ; hors 0–5 rejeté). Ex: ['Cloud: AWS|2','React']"
+    ),
+  activityAreas: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Domaines : libellés OU ids du dictionnaire setting.activityArea (hiérarchique, feuilles Profils/Certifications)"
+    ),
+  expertiseAreas: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Secteurs restreints à S1–S12 : libellés OU ids du dictionnaire setting.expertiseArea (value contenant [S1]…[S12]). Hors S1–S12 rejeté."
+    ),
+  skills: z.string().optional().describe("Compétences en texte libre (attribut skills du DT)"),
+  experience: z.string().optional().describe("Niveau d'expérience : libellé résolu en id via setting.experience"),
+  languages: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Langues, format '<langue>|<niveau>'. Langue = libellé/id setting.languageSpoken. Niveau CEFR setting.languageLevel : A1,A2,B1,B2,C1,C2 (ou la value, ex: 'B1 - Indépendant-'). Ex: ['Anglais|B2']"
+    ),
+  mode: z
+    .enum(["merge", "replace"])
+    .default("merge")
+    .describe("merge (défaut, union sans doublon avec l'existant) ou replace (remplace les champs fournis)"),
+} as const;
 
 export const CandidateTechnicalDataUpdateSchema = z
   .object({
     candidateId: z.string().min(1).describe("ID du candidat dont on met à jour le dossier technique"),
-    tools: z
-      .array(z.string())
-      .optional()
-      .describe(
-        "Outils / technos, format '<outil>' ou '<outil>|<niveau>'. Outil = libellé OU id setting.tool. Niveau = entier 0–5 (0 = non évalué, défaut si absent ; hors 0–5 rejeté). Ex: ['Cloud: AWS|2','React']"
-      ),
-    activityAreas: z
-      .array(z.string())
-      .optional()
-      .describe(
-        "Domaines : libellés OU ids du dictionnaire setting.activityArea (hiérarchique, feuilles Profils/Certifications)"
-      ),
-    expertiseAreas: z
-      .array(z.string())
-      .optional()
-      .describe(
-        "Secteurs restreints à S1–S12 : libellés OU ids du dictionnaire setting.expertiseArea (value contenant [S1]…[S12]). Hors S1–S12 rejeté."
-      ),
-    skills: z.string().optional().describe("Compétences en texte libre (attribut skills du DT)"),
-    experience: z.string().optional().describe("Niveau d'expérience : libellé résolu en id via setting.experience"),
-    languages: z
-      .array(z.string())
-      .optional()
-      .describe(
-        "Langues, format '<langue>|<niveau>'. Langue = libellé/id setting.languageSpoken. Niveau CEFR setting.languageLevel : A1,A2,B1,B2,C1,C2 (ou la value, ex: 'B1 - Indépendant-'). Ex: ['Anglais|B2']"
-      ),
-    mode: z
-      .enum(["merge", "replace"])
-      .default("merge")
-      .describe("merge (défaut, union sans doublon avec l'existant) ou replace (remplace les champs fournis)"),
+    ...technicalDataFields,
   })
   .strict();
 export type CandidateTechnicalDataUpdateInput = z.infer<typeof CandidateTechnicalDataUpdateSchema>;
+
+export const ResourceTechnicalDataUpdateSchema = z
+  .object({
+    resourceId: z
+      .string()
+      .min(1)
+      .describe("ID de la ressource (collaborateur) dont on met à jour le dossier technique"),
+    ...technicalDataFields,
+  })
+  .strict();
+export type ResourceTechnicalDataUpdateInput = z.infer<typeof ResourceTechnicalDataUpdateSchema>;
 
 // ---- Candidate availability / mobility / administrative (salaire, contrat souhaité) write schema ----
 

@@ -6,7 +6,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { requestContext } from "./auth/context.js";
 import { getBoondJwtForUser } from "./auth/keyvault.js";
 import { registerCandidateTools } from "./tools/candidates.js";
-import { registerCandidateTechnicalDataTools } from "./tools/candidates-technical-data.js";
+import {
+  registerCandidateTechnicalDataTools,
+  registerResourceTechnicalDataTools,
+} from "./tools/candidates-technical-data.js";
 import { registerCandidateAdministrativeTools } from "./tools/candidates-administrative.js";
 import { registerResourceTools } from "./tools/resources.js";
 import { registerContactTools } from "./tools/contacts.js";
@@ -106,6 +109,7 @@ function registerAllTools(server: McpServer): void {
   registerCandidateTechnicalDataTools(server);
   registerCandidateAdministrativeTools(server);
   registerResourceTools(server);
+  registerResourceTechnicalDataTools(server);
   registerContactTools(server);
   registerCompanyTools(server);
   registerOpportunityTools(server);

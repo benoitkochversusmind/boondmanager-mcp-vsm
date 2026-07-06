@@ -279,6 +279,13 @@ describe("ActionSearchSchema", () => {
     expect(ActionSearchSchema.safeParse({ dateTo: "2026-1-1" }).success).toBe(false);
   });
 
+  it("should cap pageSize at 100 (BoondManager /actions route limit)", () => {
+    expect(ActionSearchSchema.safeParse({ pageSize: 100 }).success).toBe(true);
+    // >100 would trigger BoondManager's silent fallback to 30 → reject instead.
+    expect(ActionSearchSchema.safeParse({ pageSize: 200 }).success).toBe(false);
+    expect(ActionSearchSchema.safeParse({ pageSize: 500 }).success).toBe(false);
+  });
+
   it("should reject the old startDate/endDate names (strict mode)", () => {
     expect(ActionSearchSchema.safeParse({ startDate: "2026-01-01" }).success).toBe(false);
     expect(ActionSearchSchema.safeParse({ endDate: "2026-01-01" }).success).toBe(false);

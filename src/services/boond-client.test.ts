@@ -1294,12 +1294,40 @@ describe("fetchTabResponse + formatTabAuto (Bug 1 — tab pagination)", () => {
     };
   }
 
-  it("requests maxResults=500 on the first call (fixes the default-page-size bug)", async () => {
-    fetchMock.mockResolvedValue(jsonResponse(actionsPage([1, 2, 3, 4, 5, 6], 6)));
-    await fetchTabResponse("/candidates/42893/actions");
+  /** Inclusive integer range [from, to]. */
+  function range(from: number, to: number): number[] {
+    return Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  }
+
+  it("requests maxResults=500 on the first call for a non-actions tab (fixes the default-page-size bug)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ data: [{ id: "1", type: "project", attributes: {} }], meta: { totals: { rows: 1 } } })
+    );
+    await fetchTabResponse("/resources/42893/projects");
     const url = new URL(fetchMock.mock.calls[0][0]);
     expect(url.searchParams.get("maxResults")).toBe("500");
     expect(url.searchParams.get("page")).toBe("1");
+  });
+
+  it("caps maxResults at 100 on /actions paths (Boond route limit → avoids silent fallback to 30)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(actionsPage([1, 2, 3], 3)));
+    await fetchTabResponse("/candidates/42893/actions");
+    const url = new URL(fetchMock.mock.calls[0][0]);
+    expect(url.searchParams.get("maxResults")).toBe("100");
+  });
+
+  it("keeps paginating past a server-side page cap (no silent truncation)", async () => {
+    // Simulate BoondManager honouring at most 100/page even though we ask for it:
+    // total is 250, each page returns 100/100/50. The walker must fetch all three
+    // (relying on total, NOT on `data.length < pageSize`).
+    fetchMock.mockImplementation((url: string) => {
+      const page = Number(new URL(url).searchParams.get("page"));
+      const ids = page === 1 ? range(1, 100) : page === 2 ? range(101, 200) : range(201, 250);
+      return Promise.resolve(jsonResponse(actionsPage(ids, 250)));
+    });
+    const resp = await fetchTabResponse("/candidates/42893/actions");
+    expect((resp.data as unknown[]).length).toBe(250);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("returns all rows in a single page when total fits", async () => {

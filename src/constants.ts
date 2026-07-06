@@ -9,6 +9,13 @@ export const MAX_PAGE_SIZE = 500;
 // typical interactive exploration. The model can refine filters instead.
 export const MAX_SEARCH_PAGE = 100;
 
+// The `/actions` route is memory-heavy server-side: BoondManager caps
+// `maxResults` at 100 on it and, above that, silently falls back to the default
+// of 30 (Boond Guard notice, 2026-06). We mirror that ceiling so we never trip
+// the cap (which would silently truncate to 30). Applies to the `/actions`
+// search page size and to `/…/actions` tab pagination (see fetchTabResponse).
+export const ACTIONS_MAX_PAGE_SIZE = 100;
+
 // Document upload (pièces jointes) limits.
 // BoondManager enforces a hard 15 Mo cap per attachment (verified live:
 // 10 Mo OK, 20 Mo → 422 "exceeds 15 Mo"). We mirror it as the endpoint guard.

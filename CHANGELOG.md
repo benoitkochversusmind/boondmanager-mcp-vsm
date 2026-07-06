@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.20.3] - 2026-06-16
+
+### Corrigé (anticipation d'une évolution BoondManager)
+
+- **Route `/actions` : plafond `maxResults` à 100.** BoondManager va plafonner `maxResults` à **100** sur `/api/actions` (route mémoire-intensive), avec **repli silencieux à 30** au-dessus (préavis Boond Guard). Sans adaptation, une recherche/onglet d'actions aurait renvoyé **30 résultats sans erreur** — troncature invisible.
+  - **`boond_actions_search`** : `pageSize` plafonné à **100** au niveau du schéma (rejet clair au-delà, paginer via `page`) — inchangé pour les autres recherches.
+  - **`fetchTabResponse`** (onglets `*_actions` : candidats, ressources, contacts, sociétés) : requêtes plafonnées à **100/page** sur les chemins `/…/actions`, et **pagination fiabilisée** — l'arrêt se fait désormais sur `meta.totals.rows` (total couvert) et non sur « page incomplète », de sorte qu'un plafond serveur ne peut plus être confondu avec la fin de la collection. Aucune perte de couverture (jusqu'à 50 pages sur cette route).
+
 ## [1.20.2] - 2026-06-16
 
 ### Ajouté

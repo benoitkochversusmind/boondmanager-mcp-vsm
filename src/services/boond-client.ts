@@ -8,6 +8,7 @@ import {
   DEFAULT_HTTP_RETRY_MAX_MS,
   DEFAULT_HTTP_RATE_LIMIT_RPS,
   DEFAULT_HTTP_RATE_LIMIT_BURST,
+  ACTIONS_MAX_PAGE_SIZE,
 } from "../constants.js";
 import type { BoondConfig, JsonApiResponse, SearchParams } from "../types.js";
 import { TokenBucket } from "./rate-limiter.js";
@@ -879,22 +880,32 @@ export async function fetchEntityWithInformation(
  * visible) and replaces `data` with the concatenation of every page.
  */
 export async function fetchTabResponse(path: string, maxPages = 10, pageSize = 500): Promise<JsonApiResponse> {
-  const first = await apiRequest(path, "GET", undefined, { maxResults: pageSize, page: 1 });
+  // The `/…/actions` collections are memory-heavy: BoondManager caps maxResults
+  // at 100 on that route and silently falls back to 30 above it. Request ≤100 on
+  // those paths (and allow more pages) so the cap is never tripped.
+  const isActions = /\/actions$/.test(path);
+  const reqSize = isActions ? Math.min(pageSize, ACTIONS_MAX_PAGE_SIZE) : pageSize;
+  const pageCap = isActions ? Math.max(maxPages, 50) : maxPages;
+
+  const first = await apiRequest(path, "GET", undefined, { maxResults: reqSize, page: 1 });
   const firstData = Array.isArray(first.data) ? first.data : first.data ? [first.data] : [];
   const total = first.meta?.totals?.rows;
 
-  // Single entity, unknown total, or everything already fits → no extra calls.
-  if (total === undefined || firstData.length >= total || firstData.length < pageSize) {
+  // Single entity (object data / no total) or everything already returned.
+  if (total === undefined || firstData.length >= total || firstData.length === 0) {
     return first;
   }
 
+  // Walk pages until the reported total is covered. We loop on
+  // `allData.length < total` — NOT `data.length < pageSize` — so a server-side
+  // page cap (e.g. /actions) cannot be mistaken for the end of the collection
+  // (which would silently truncate the results). An empty page is the safety stop.
   const allData = [...firstData];
-  for (let page = 2; page <= maxPages && allData.length < total; page++) {
-    const resp = await apiRequest(path, "GET", undefined, { maxResults: pageSize, page });
+  for (let page = 2; page <= pageCap && allData.length < total; page++) {
+    const resp = await apiRequest(path, "GET", undefined, { maxResults: reqSize, page });
     const data = Array.isArray(resp.data) ? resp.data : resp.data ? [resp.data] : [];
     if (data.length === 0) break;
     allData.push(...data);
-    if (data.length < pageSize) break;
   }
   return { ...first, data: allData };
 }

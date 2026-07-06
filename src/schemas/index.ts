@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_SEARCH_PAGE } from "../constants.js";
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_SEARCH_PAGE, ACTIONS_MAX_PAGE_SIZE } from "../constants.js";
 
 // Common search schema
 export const SearchSchema = z
@@ -844,7 +844,16 @@ export const ActionSearchSchema = z
         "Période dynamique relative au jour courant. Combinable avec `period` (qui choisit le champ filtré : started / created / updated). Plus pratique que `dateFrom`+`dateTo` pour les requêtes récurrentes."
       ),
     page: z.number().int().min(1).max(MAX_SEARCH_PAGE).default(1).describe(`Numéro de page (max: ${MAX_SEARCH_PAGE})`),
-    pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).describe("Résultats par page"),
+    // BoondManager caps maxResults at 100 on the memory-heavy /actions route
+    // (silent fallback to 30 above 100) → hard-limit pageSize to 100 here rather
+    // than let a >100 request silently return only 30. Paginate for more.
+    pageSize: z
+      .number()
+      .int()
+      .min(1)
+      .max(ACTIONS_MAX_PAGE_SIZE)
+      .default(DEFAULT_PAGE_SIZE)
+      .describe(`Résultats par page (max: ${ACTIONS_MAX_PAGE_SIZE} sur /actions ; paginer avec \`page\` au-delà)`),
   })
   .strict();
 

@@ -208,7 +208,7 @@ async function resolveUser(
   if (!provided) {
     res.setHeader(
       "WWW-Authenticate",
-      `Bearer realm="${MCP_BASE_URL}", resource_metadata="${MCP_BASE_URL}/.well-known/oauth-authorization-server"`
+      `Bearer realm="${MCP_BASE_URL}", resource_metadata="${MCP_BASE_URL}/.well-known/oauth-protected-resource"`
     );
     res.status(401).json({ error: "unauthorized", error_description: "Authentication required" });
     return null;
@@ -350,18 +350,40 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", version: "1.0.0-vsm", users, oauthSessions: oauthSessions.size });
 });
 
-// ── OAuth metadata ────────────────────────────────────────────────────────────
-app.get("/.well-known/oauth-authorization-server", (_req, res) => {
+// ── OAuth discovery metadata ──────────────────────────────────────────────────
+// Protected Resource Metadata (RFC 9728) — what Claude.ai's remote MCP connector
+// fetches first, from the resource_metadata URL in the 401 WWW-Authenticate header.
+// Served both at the bare path and at path-suffixed variants (RFC 9728 §3.1:
+// for a resource ".../mcp", the PRM lives at ".../.well-known/oauth-protected-resource/mcp").
+function protectedResourceMetadata(req: express.Request, res: express.Response): void {
+  const suffix = (req.params as { 0?: string })[0] ? `/${(req.params as { 0?: string })[0]}` : "";
+  res.json({
+    resource: `${MCP_BASE_URL}${suffix}`,
+    authorization_servers: [MCP_BASE_URL],
+    bearer_methods_supported: ["header"],
+    scopes_supported: ["openid", "email", "profile"],
+  });
+}
+app.get("/.well-known/oauth-protected-resource", protectedResourceMetadata);
+app.get("/.well-known/oauth-protected-resource/*", protectedResourceMetadata);
+
+// Authorization Server Metadata (RFC 8414). Served at the bare path and at
+// path-suffixed variants, since some clients append the resource path.
+function authorizationServerMetadata(_req: express.Request, res: express.Response): void {
   res.json({
     issuer: MCP_BASE_URL,
     authorization_endpoint: `${MCP_BASE_URL}/oauth/authorize`,
     token_endpoint: `${MCP_BASE_URL}/oauth/token`,
+    registration_endpoint: `${MCP_BASE_URL}/register`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
+    token_endpoint_auth_methods_supported: ["none"],
     code_challenge_methods_supported: ["S256"],
     scopes_supported: ["openid", "email", "profile"],
   });
-});
+}
+app.get("/.well-known/oauth-authorization-server", authorizationServerMetadata);
+app.get("/.well-known/oauth-authorization-server/*", authorizationServerMetadata);
 
 // ── Authorization endpoint ───────────────────────────────────────────────────
 app.get("/oauth/authorize", (req, res) => {
@@ -633,7 +655,23 @@ app.post(
   },
   (req, res) => app._router.handle(req, res, () => {})
 );
-app.get("/register", (_req, res) => res.status(501).json({ error: "not_supported" }));
+// Dynamic Client Registration (RFC 7591), permissive. This server is a public
+// PKCE authorization server: client_id is not validated unless OAUTH_CLIENT_ID is
+// configured, so we simply mint a client_id and echo the request metadata. This
+// lets Claude.ai connectors that require DCR complete registration; those that
+// skip DCR use a public client_id directly — both paths work.
+app.post("/register", (req, res) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const clientId = `mcp-${randomBytes(16).toString("hex")}`;
+  res.status(201).json({
+    client_id: clientId,
+    token_endpoint_auth_method: "none",
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+    redirect_uris: Array.isArray(body.redirect_uris) ? body.redirect_uris : [],
+    ...(typeof body.client_name === "string" ? { client_name: body.client_name } : {}),
+  });
+});
 
 app.all("/sse", handleMcp);
 app.all("/mcp", handleMcp);

@@ -376,6 +376,119 @@ describe("updateCandidateTechnicalData — languages (CEFR)", () => {
   });
 });
 
+describe("updateCandidateTechnicalData — references (professional experiences)", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("creates a new experience (no id) with a temporary negative id, splitting dates into month/year", async () => {
+    mockDictionary();
+    const api = mockApi({ references: [] });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [
+        {
+          title: "Développeur backend",
+          company: "ACME",
+          location: "Paris",
+          startDate: "2021-03",
+          endDate: "2023-06-15",
+          skills: "Node, PostgreSQL",
+          description: "Conception d'API.",
+        },
+      ],
+    });
+    // Matches the exact round-trip shape (no startDate/endDate — not persisted).
+    expect(putAttrs(api)["references"]).toEqual([
+      {
+        id: "-1",
+        title: "Développeur backend",
+        company: "ACME",
+        location: "Paris",
+        skills: "Node, PostgreSQL",
+        startYear: "2021",
+        startMonth: "3",
+        endYear: "2023",
+        endMonth: "6",
+        description: "Conception d'API.",
+      },
+    ]);
+  });
+
+  it("gives each new (id-less) experience its own decreasing temp id", async () => {
+    mockDictionary();
+    const api = mockApi({ references: [] });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [
+        { title: "Poste A", description: "desc A" },
+        { title: "Poste B", description: "desc B" },
+      ],
+    });
+    const refs = putAttrs(api)["references"] as Array<{ id: string }>;
+    expect(refs.map((r) => r.id)).toEqual(["-1", "-2"]);
+  });
+
+  it("merge: updates the existing experience matching an id and keeps the others verbatim", async () => {
+    mockDictionary();
+    const existing = [
+      { id: "500", title: "Ancien titre", description: "ancienne desc" },
+      { id: "501", title: "Autre", description: "autre desc" },
+    ];
+    const api = mockApi({ references: existing });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [{ id: "500", title: "Titre mis à jour", description: "nouvelle desc" }],
+      mode: "merge",
+    });
+    const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
+    expect(refs).toHaveLength(2);
+    expect(refs[0]).toMatchObject({ id: "500", title: "Titre mis à jour", description: "nouvelle desc" });
+    expect(refs[1]).toEqual({ id: "501", title: "Autre", description: "autre desc" }); // untouched
+  });
+
+  it("merge: appends a new experience after the preserved existing ones", async () => {
+    mockDictionary();
+    const api = mockApi({ references: [{ id: "500", title: "Existant", description: "d" }] });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [{ title: "Nouveau poste", description: "nd" }],
+      mode: "merge",
+    });
+    const refs = putAttrs(api)["references"] as Array<{ id: string; title: string }>;
+    expect(refs.map((r) => r.id)).toEqual(["500", "-1"]);
+    expect(refs[1].title).toBe("Nouveau poste");
+  });
+
+  it("replace: keeps only the provided experiences", async () => {
+    mockDictionary();
+    const api = mockApi({
+      references: [
+        { id: "500", title: "A", description: "a" },
+        { id: "501", title: "B", description: "b" },
+      ],
+    });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [{ id: "501", title: "B updated", description: "b2" }],
+      mode: "replace",
+    });
+    const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
+    expect(refs).toEqual([{ id: "501", title: "B updated", description: "b2" }]);
+  });
+
+  it("omits date fields entirely when no dates are provided", async () => {
+    mockDictionary();
+    const api = mockApi({ references: [] });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [{ title: "Sans dates", description: "d" }],
+    });
+    const ref = (putAttrs(api)["references"] as Array<Record<string, unknown>>)[0];
+    expect(ref).not.toHaveProperty("startYear");
+    expect(ref).not.toHaveProperty("endYear");
+    expect(ref).not.toHaveProperty("startDate");
+  });
+});
+
 describe("updateCandidateTechnicalData — tool level validation", () => {
   beforeEach(() => vi.restoreAllMocks());
 

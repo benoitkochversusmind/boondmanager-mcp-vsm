@@ -413,14 +413,15 @@ describe("updateCandidateTechnicalData — references (professional experiences)
     ]);
   });
 
-  it("always emits the (empty) mandatory month/year keys on a dateless new entry", async () => {
+  it("OMITS the month/year keys on a dateless entry (the API rejects '' for them)", async () => {
     mockDictionary();
     const api = mockApi({ references: [] });
     await updateCandidateTechnicalData({
       candidateId: "29514",
       references: [{ title: "Sans dates", description: "d" }],
     });
-    // BoondManager 422s the whole array if any entry omits these — must be "" not absent.
+    // Empty string is rejected (1002 Wrong attribute) — the date keys must be absent, not "".
+    // Non-date strings stay "" (the API accepts those).
     expect(putAttrs(api)["references"]).toEqual([
       {
         id: "-1",
@@ -428,10 +429,6 @@ describe("updateCandidateTechnicalData — references (professional experiences)
         company: "",
         location: "",
         skills: "",
-        startMonth: "",
-        startYear: "",
-        endMonth: "",
-        endYear: "",
         description: "d",
       },
     ]);
@@ -466,16 +463,12 @@ describe("updateCandidateTechnicalData — references (professional experiences)
     const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
     expect(refs).toHaveLength(2);
     expect(refs[0]).toMatchObject({ id: "500", title: "Titre mis à jour", description: "nouvelle desc" });
-    // untouched entry is re-serialized to the FULL shape (empty mandatory keys preserved)
+    // untouched entry: string keys filled to "", empty date keys stripped (not sent as "")
     expect(refs[1]).toEqual({
       id: "501",
       title: "Autre",
       company: "",
       location: "",
-      startMonth: "",
-      startYear: "",
-      endMonth: "",
-      endYear: "",
       skills: "",
       description: "autre desc",
     });
@@ -514,10 +507,6 @@ describe("updateCandidateTechnicalData — references (professional experiences)
         title: "B updated",
         company: "",
         location: "",
-        startMonth: "",
-        startYear: "",
-        endMonth: "",
-        endYear: "",
         skills: "",
         description: "b2",
       },
@@ -537,9 +526,9 @@ describe("updateCandidateTechnicalData — references (professional experiences)
     expect(ref).toMatchObject({ startYear: "2020", startMonth: "1", endYear: "2021", endMonth: "12" });
   });
 
-  it("re-serializes existing entries with all mandatory keys present, even when the read omitted empties", async () => {
+  it("strips the stored empty '' month/year keys on an existing entry (the API rejects them)", async () => {
     mockDictionary();
-    // BoondManager's GET omits empty-valued keys: this existing ref lacks endMonth/endYear/location/skills.
+    // Real prod shape (candidate #18560): dateless references stored with startMonth:"".
     const api = mockApi({
       references: [{ id: "48457", title: "Formateur", startMonth: "", startYear: "", description: "x" }],
     });
@@ -549,19 +538,17 @@ describe("updateCandidateTechnicalData — references (professional experiences)
       mode: "merge",
     });
     const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
-    // every mandatory key is present on the preserved existing entry (filled to "")
+    // the empty date keys are dropped; non-date string keys are filled to ""
     expect(refs[0]).toEqual({
       id: "48457",
       title: "Formateur",
       company: "",
       location: "",
-      startMonth: "",
-      startYear: "",
-      endMonth: "",
-      endYear: "",
       skills: "",
       description: "x",
     });
+    expect(refs[0]).not.toHaveProperty("startMonth");
+    expect(refs[0]).not.toHaveProperty("startYear");
   });
 
   it("PRESERVES non-whitelisted fields the API returned on an existing reference (merge, untouched)", async () => {
@@ -579,15 +566,15 @@ describe("updateCandidateTechnicalData — references (professional experiences)
       mode: "merge",
     });
     const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
-    // extra fields preserved verbatim, mandatory keys filled
+    // extra fields preserved verbatim; empty/absent date keys stay absent
     expect(refs[0]).toMatchObject({
       id: "48457",
       startDate: "2020-01-01",
       contractType: "5",
       nbMonths: "12",
-      startMonth: "",
-      endMonth: "",
     });
+    expect(refs[0]).not.toHaveProperty("startMonth");
+    expect(refs[0]).not.toHaveProperty("endMonth");
   });
 
   it("PRESERVES an existing reference's stored fields when UPDATING it by id (merge)", async () => {

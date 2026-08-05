@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.21.1] - 2026-08-05
+
+### Corrigé
+
+- **Écriture des expériences professionnelles : 422 sur tout le tableau `references`.** Test prod : l'API BoondManager valide **chaque** référence du tableau contre la forme complète — si une seule entrée omet `startMonth`, `startYear`, `endMonth` ou `endYear` (même à `""`), elle rejette **l'ensemble** du tableau en 422. Le connecteur omettait ces clés sur les entrées sans date (nouvelles expériences), et re-sérialisait les entrées existantes de façon incomplète. Désormais **chaque** référence émise porte la forme complète (`id, title, company, location, startMonth, startYear, endMonth, endYear, skills, description`), avec `""` pour tout champ absent : `buildReferenceWrite` émet toujours les clés mois/année vides, et les entrées existantes passent par `normalizeExistingReference` (clés vides préservées) au lieu d'être réémises verbatim. 2 tests ajoutés (clés mois/année vides obligatoires, re-sérialisation complète des existantes).
+
 ## [1.21.0] - 2026-08-05
 
 ### Ajouté

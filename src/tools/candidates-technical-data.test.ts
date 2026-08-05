@@ -396,7 +396,7 @@ describe("updateCandidateTechnicalData — references (professional experiences)
         },
       ],
     });
-    // Matches the exact round-trip shape (no startDate/endDate — not persisted).
+    // Full round-trip shape: every field present (no startDate/endDate — not persisted).
     expect(putAttrs(api)["references"]).toEqual([
       {
         id: "-1",
@@ -409,6 +409,30 @@ describe("updateCandidateTechnicalData — references (professional experiences)
         endYear: "2023",
         endMonth: "6",
         description: "Conception d'API.",
+      },
+    ]);
+  });
+
+  it("always emits the (empty) mandatory month/year keys on a dateless new entry", async () => {
+    mockDictionary();
+    const api = mockApi({ references: [] });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [{ title: "Sans dates", description: "d" }],
+    });
+    // BoondManager 422s the whole array if any entry omits these — must be "" not absent.
+    expect(putAttrs(api)["references"]).toEqual([
+      {
+        id: "-1",
+        title: "Sans dates",
+        company: "",
+        location: "",
+        skills: "",
+        startMonth: "",
+        startYear: "",
+        endMonth: "",
+        endYear: "",
+        description: "d",
       },
     ]);
   });
@@ -442,7 +466,19 @@ describe("updateCandidateTechnicalData — references (professional experiences)
     const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
     expect(refs).toHaveLength(2);
     expect(refs[0]).toMatchObject({ id: "500", title: "Titre mis à jour", description: "nouvelle desc" });
-    expect(refs[1]).toEqual({ id: "501", title: "Autre", description: "autre desc" }); // untouched
+    // untouched entry is re-serialized to the FULL shape (empty mandatory keys preserved)
+    expect(refs[1]).toEqual({
+      id: "501",
+      title: "Autre",
+      company: "",
+      location: "",
+      startMonth: "",
+      startYear: "",
+      endMonth: "",
+      endYear: "",
+      skills: "",
+      description: "autre desc",
+    });
   });
 
   it("merge: appends a new experience after the preserved existing ones", async () => {
@@ -472,20 +508,49 @@ describe("updateCandidateTechnicalData — references (professional experiences)
       mode: "replace",
     });
     const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
-    expect(refs).toEqual([{ id: "501", title: "B updated", description: "b2" }]);
+    expect(refs).toEqual([
+      {
+        id: "501",
+        title: "B updated",
+        company: "",
+        location: "",
+        startMonth: "",
+        startYear: "",
+        endMonth: "",
+        endYear: "",
+        skills: "",
+        description: "b2",
+      },
+    ]);
   });
 
-  it("omits date fields entirely when no dates are provided", async () => {
+  it("never emits startDate/endDate (not persisted), only granular month/year", async () => {
     mockDictionary();
     const api = mockApi({ references: [] });
     await updateCandidateTechnicalData({
       candidateId: "29514",
-      references: [{ title: "Sans dates", description: "d" }],
+      references: [{ title: "Avec dates", startDate: "2020-01", endDate: "2021-12", description: "d" }],
     });
     const ref = (putAttrs(api)["references"] as Array<Record<string, unknown>>)[0];
-    expect(ref).not.toHaveProperty("startYear");
-    expect(ref).not.toHaveProperty("endYear");
     expect(ref).not.toHaveProperty("startDate");
+    expect(ref).not.toHaveProperty("endDate");
+    expect(ref).toMatchObject({ startYear: "2020", startMonth: "1", endYear: "2021", endMonth: "12" });
+  });
+
+  it("re-serializes existing entries to the full shape, preserving their stored empty date keys", async () => {
+    mockDictionary();
+    // mirrors the real prod shape (candidate #18560): dates live in the text, month/year are ""
+    const api = mockApi({
+      references: [{ id: "48457", title: "Formateur", company: "", startMonth: "", startYear: "", description: "x" }],
+    });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [{ title: "Nouveau", description: "n" }],
+      mode: "merge",
+    });
+    const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
+    // the preserved existing entry keeps all four empty date keys present
+    expect(refs[0]).toMatchObject({ id: "48457", startMonth: "", startYear: "", endMonth: "", endYear: "" });
   });
 });
 

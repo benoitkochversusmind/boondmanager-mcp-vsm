@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.21.2] - 2026-08-05
+
+### Corrigé
+
+- **Écriture des expériences professionnelles : 422 persistant sur les références existantes.** Le fix 1.21.1 ne corrigeait que les **nouvelles** entrées. Les entrées **existantes** échouaient encore car `normalizeExistingReference` **listait explicitement** 10 champs et **supprimait tout autre champ** que le GET brut `/technical-datas/{tdId}` renvoie sur une référence. Or l'API exige ces champs en retour lors d'une mise à jour : en supprimer un fait rejeter **tout** le tableau en 422 (les nouvelles entrées, elles, n'ont jamais eu ces champs et passaient). Désormais on **préserve l'intégralité** de l'objet référence lu (spread, aucun whitelist, aucun champ supprimé) et on se contente de **compléter** les clés obligatoires absentes (`title, company, location, startMonth, startYear, endMonth, endYear, skills, description`) avec `""`. La mise à jour d'une référence par `id` part également de l'objet existant (spread) avant d'appliquer les champs fournis, pour ne rien perdre. 4 tests ajoutés (préservation des champs non-whitelistés, complétion des clés vides, préservation lors d'un update par id). Suite à **679 tests**.
+
 ## [1.21.1] - 2026-08-05
 
 ### Corrigé

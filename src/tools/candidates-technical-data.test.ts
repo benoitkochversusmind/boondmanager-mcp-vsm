@@ -537,11 +537,11 @@ describe("updateCandidateTechnicalData — references (professional experiences)
     expect(ref).toMatchObject({ startYear: "2020", startMonth: "1", endYear: "2021", endMonth: "12" });
   });
 
-  it("re-serializes existing entries to the full shape, preserving their stored empty date keys", async () => {
+  it("re-serializes existing entries with all mandatory keys present, even when the read omitted empties", async () => {
     mockDictionary();
-    // mirrors the real prod shape (candidate #18560): dates live in the text, month/year are ""
+    // BoondManager's GET omits empty-valued keys: this existing ref lacks endMonth/endYear/location/skills.
     const api = mockApi({
-      references: [{ id: "48457", title: "Formateur", company: "", startMonth: "", startYear: "", description: "x" }],
+      references: [{ id: "48457", title: "Formateur", startMonth: "", startYear: "", description: "x" }],
     });
     await updateCandidateTechnicalData({
       candidateId: "29514",
@@ -549,8 +549,78 @@ describe("updateCandidateTechnicalData — references (professional experiences)
       mode: "merge",
     });
     const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
-    // the preserved existing entry keeps all four empty date keys present
-    expect(refs[0]).toMatchObject({ id: "48457", startMonth: "", startYear: "", endMonth: "", endYear: "" });
+    // every mandatory key is present on the preserved existing entry (filled to "")
+    expect(refs[0]).toEqual({
+      id: "48457",
+      title: "Formateur",
+      company: "",
+      location: "",
+      startMonth: "",
+      startYear: "",
+      endMonth: "",
+      endYear: "",
+      skills: "",
+      description: "x",
+    });
+  });
+
+  it("PRESERVES non-whitelisted fields the API returned on an existing reference (merge, untouched)", async () => {
+    mockDictionary();
+    // The raw /technical-datas GET can carry fields beyond the known set; dropping
+    // them makes the API 422 the whole array. They must survive the round-trip.
+    const api = mockApi({
+      references: [
+        { id: "48457", title: "Dev", description: "x", startDate: "2020-01-01", contractType: "5", nbMonths: "12" },
+      ],
+    });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [{ title: "Nouveau", description: "n" }],
+      mode: "merge",
+    });
+    const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
+    // extra fields preserved verbatim, mandatory keys filled
+    expect(refs[0]).toMatchObject({
+      id: "48457",
+      startDate: "2020-01-01",
+      contractType: "5",
+      nbMonths: "12",
+      startMonth: "",
+      endMonth: "",
+    });
+  });
+
+  it("PRESERVES an existing reference's stored fields when UPDATING it by id (merge)", async () => {
+    mockDictionary();
+    const api = mockApi({
+      references: [
+        {
+          id: "48457",
+          title: "Ancien",
+          description: "x",
+          company: "ACME",
+          startMonth: "3",
+          startYear: "2019",
+          customField: "keep-me",
+        },
+      ],
+    });
+    await updateCandidateTechnicalData({
+      candidateId: "29514",
+      references: [{ id: "48457", title: "Nouveau titre", description: "y" }],
+      mode: "merge",
+    });
+    const refs = putAttrs(api)["references"] as Array<Record<string, unknown>>;
+    // title/description overridden by input; every other stored field preserved
+    expect(refs[0]).toMatchObject({
+      id: "48457",
+      title: "Nouveau titre",
+      description: "y",
+      company: "ACME",
+      startMonth: "3",
+      startYear: "2019",
+      customField: "keep-me",
+    });
   });
 });
 

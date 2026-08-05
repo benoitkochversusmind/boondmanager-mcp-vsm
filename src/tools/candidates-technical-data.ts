@@ -202,31 +202,25 @@ type TechnicalDataFields = Omit<CandidateTechnicalDataUpdateInput, "candidateId"
 type ReferenceInput = NonNullable<TechnicalDataFields["references"]>[number];
 
 /**
- * The write shape of a reference (TAB_REFERENCE), matching EXACTLY the fields a
- * live GET /technical-datas/{id} round-trips (verified on candidate #18560):
- * id, title, company, location, startMonth/startYear, endMonth/endYear, skills,
- * description. The dates are stored as granular month/year strings — the API's
- * `startDate`/`endDate` are not persisted, so we never emit them.
- *
- * Every field is ALWAYS present. BoondManager's PUT validates each reference of
- * the array against the full shape: if a single entry omits `startMonth`,
- * `startYear`, `endMonth` or `endYear`, the API rejects the WHOLE array with a
- * 422 — even when the value is the empty string. So we emit "" rather than
- * dropping absent fields (verified in prod: a new entry without dates 422'd
- * every reference until the empty month/year keys were sent).
+ * The mandatory string keys BoondManager validates on EVERY reference of the
+ * array. If a single entry omits any of them — even with an empty-string value —
+ * the API 422s the WHOLE array. So every emitted reference must carry all of
+ * these, defaulting to "" when absent.
  */
-type ReferenceWrite = {
-  id: string;
-  title: string;
-  company: string;
-  location: string;
-  startMonth: string;
-  startYear: string;
-  endMonth: string;
-  endYear: string;
-  skills: string;
-  description: string;
-};
+const MANDATORY_REF_KEYS = [
+  "title",
+  "company",
+  "location",
+  "startMonth",
+  "startYear",
+  "endMonth",
+  "endYear",
+  "skills",
+  "description",
+] as const;
+
+/** A reference object of the DT payload — open shape (fields beyond the known ones are preserved). */
+type ReferenceObject = Record<string, unknown>;
 
 /** Split "YYYY-MM" / "YYYY-MM-DD" into { year, month } (month un-padded, 1–12). */
 function splitYearMonth(d?: string): { year: string; month: string } {
@@ -236,70 +230,76 @@ function splitYearMonth(d?: string): { year: string; month: string } {
   return { year: m[1], month: String(Number(m[2])) };
 }
 
-/** Read a string field off an existing (already-stored) reference, defaulting to "". */
-function refStr(o: Record<string, unknown>, key: string): string {
-  const v = o[key];
-  return v === undefined || v === null ? "" : String(v);
+/** Ensure every mandatory key is present on the object ("" when missing). Mutates & returns. */
+function fillMandatoryRefKeys(o: ReferenceObject): ReferenceObject {
+  for (const k of MANDATORY_REF_KEYS) {
+    if (o[k] === undefined || o[k] === null) o[k] = "";
+  }
+  return o;
 }
 
 /**
- * Build the full stored shape of a reference from caller input. `startDate`/
- * `endDate` are split into the granular month/year columns BoondManager persists
- * (REF_DEBUT_MOIS/ANNEE, REF_FIN_MOIS/ANNEE). ALL fields are emitted ("" when
- * absent) — see ReferenceWrite for why the empty date keys are mandatory.
+ * Build a reference from caller input. `base` (an existing reference read back
+ * from the DT) is spread FIRST so that when updating an existing entry we PRESERVE
+ * every field BoondManager returned — the API requires those fields back on update
+ * and silently 422s the whole array if any is dropped. Input fields then override.
+ * `startDate`/`endDate` are split into the granular month/year columns the API
+ * persists (REF_*_MOIS/ANNEE); the non-persisted `startDate`/`endDate` are never
+ * emitted. All mandatory keys are guaranteed present ("" when absent).
  */
-function buildReferenceWrite(r: ReferenceInput, id: string): ReferenceWrite {
-  const s = splitYearMonth(r.startDate);
-  const e = splitYearMonth(r.endDate);
-  return {
-    id,
-    title: r.title,
-    company: r.company ?? "",
-    location: r.location ?? "",
-    startMonth: s.month,
-    startYear: s.year,
-    endMonth: e.month,
-    endYear: e.year,
-    skills: r.skills ?? "",
-    description: r.description,
-  };
+function buildReferenceWrite(r: ReferenceInput, id: string, base?: ReferenceObject): ReferenceObject {
+  const o: ReferenceObject = base ? { ...base } : {};
+  o.id = id;
+  o.title = r.title;
+  o.description = r.description;
+  if (r.company !== undefined) o.company = r.company;
+  if (r.location !== undefined) o.location = r.location;
+  if (r.skills !== undefined) o.skills = r.skills;
+  if (r.startDate !== undefined) {
+    const s = splitYearMonth(r.startDate);
+    o.startMonth = s.month;
+    o.startYear = s.year;
+  }
+  if (r.endDate !== undefined) {
+    const e = splitYearMonth(r.endDate);
+    o.endMonth = e.month;
+    o.endYear = e.year;
+  }
+  return fillMandatoryRefKeys(o);
 }
 
 /**
- * Re-serialize an EXISTING reference (read back from the DT) into the full write
- * shape, guaranteeing every field is present ("" when missing). Preserves the
- * stored id and values verbatim; only fills in any key the API requires but the
- * stored object happens to lack — so a merge PUT never drops the mandatory empty
- * month/year keys that would 422 the whole array.
+ * Re-serialize an EXISTING reference (read back from the DT) for a merge PUT.
+ * Preserves EVERY field the read returned — no whitelist, no dropping — and only
+ * fills in the mandatory keys the read may have omitted (BoondManager omits
+ * empty-valued keys in its GET). This guards against the API rejecting the array
+ * over a field that existing references legitimately carry but a plain re-emit
+ * would lose.
  */
-function normalizeExistingReference(el: unknown): ReferenceWrite {
-  const o = el && typeof el === "object" ? (el as Record<string, unknown>) : {};
-  return {
-    id: refStr(o, "id"),
-    title: refStr(o, "title"),
-    company: refStr(o, "company"),
-    location: refStr(o, "location"),
-    startMonth: refStr(o, "startMonth"),
-    startYear: refStr(o, "startYear"),
-    endMonth: refStr(o, "endMonth"),
-    endYear: refStr(o, "endYear"),
-    skills: refStr(o, "skills"),
-    description: refStr(o, "description"),
-  };
+function normalizeExistingReference(el: unknown): ReferenceObject {
+  const o: ReferenceObject = el && typeof el === "object" ? { ...(el as ReferenceObject) } : {};
+  o.id = o.id !== undefined && o.id !== null ? String(o.id) : "";
+  return fillMandatoryRefKeys(o);
 }
 
 /**
  * Merge/replace the DT `references` array (professional experiences), keyed by id:
- *   - an input reference WITH `id` updates the matching existing entry;
+ *   - an input reference WITH `id` updates the matching existing entry (its stored
+ *     fields are preserved, input overrides on top);
  *   - an input reference WITHOUT `id` is a new entry, assigned a temporary
  *     negative id (-1, -2, …) — BoondManager assigns the real id on write;
- *   - in `merge`, existing entries not cited by id are re-serialized (full shape,
- *     empty keys preserved); in `replace`, only the provided references survive.
- * Every emitted entry carries the full ReferenceWrite shape so the API never
- * 422s the array over a missing (even empty) field.
+ *   - in `merge`, existing entries not cited by id are preserved in full (every
+ *     stored field kept, mandatory keys filled); in `replace`, only the provided
+ *     references survive.
+ * Every emitted entry carries all mandatory keys so the API never 422s the array
+ * over a missing (even empty) field.
  */
-function buildReferences(existing: unknown[], provided: ReferenceInput[], mode: "merge" | "replace"): ReferenceWrite[] {
-  const out: ReferenceWrite[] = [];
+function buildReferences(
+  existing: unknown[],
+  provided: ReferenceInput[],
+  mode: "merge" | "replace"
+): ReferenceObject[] {
+  const out: ReferenceObject[] = [];
   let temp = -1;
 
   if (mode === "replace") {
@@ -314,13 +314,15 @@ function buildReferences(existing: unknown[], provided: ReferenceInput[], mode: 
     const eid = existingId(el);
     const ov = overrides.get(eid);
     if (ov) {
-      out.push(buildReferenceWrite(ov, eid));
+      // Update: spread the existing stored reference, then apply input on top.
+      const base = el && typeof el === "object" ? (el as ReferenceObject) : undefined;
+      out.push(buildReferenceWrite(ov, eid, base));
       overrides.delete(eid);
     } else {
       out.push(normalizeExistingReference(el));
     }
   }
-  // ids provided but not currently present → treat as explicit upserts.
+  // ids provided but not currently present → explicit upserts (no base to preserve).
   for (const [id, r] of overrides) out.push(buildReferenceWrite(r, id));
   // brand-new entries (no id).
   for (const r of provided) if (!r.id) out.push(buildReferenceWrite(r, String(temp--)));

@@ -563,12 +563,45 @@ export type CandidateUpdateInput = z.infer<typeof CandidateUpdateSchema>;
 // targets the shared `/technical-datas/{tdId}` endpoint (tdId resolved from the
 // parent's `/{candidates|resources}/{id}/technical-data`).
 
+const referenceItem = z
+  .object({
+    id: z
+      .string()
+      .regex(/^[1-9][0-9]*$/)
+      .optional()
+      .describe(
+        "id d'une expérience EXISTANTE à modifier (issu de la lecture du DT). Omettre pour CRÉER une nouvelle expérience."
+      ),
+    title: z.string().min(1).max(150).describe("Intitulé du poste / de la mission (requis)"),
+    company: z.string().max(100).optional().describe("Société / client"),
+    location: z.string().max(100).optional().describe("Lieu"),
+    startDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}(-\d{2})?$/)
+      .optional()
+      .describe("Date de début, format 'YYYY-MM' ou 'YYYY-MM-DD'"),
+    endDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}(-\d{2})?$/)
+      .optional()
+      .describe("Date de fin, format 'YYYY-MM' ou 'YYYY-MM-DD' (omettre si en cours)"),
+    skills: z.string().max(250).optional().describe("Compétences / technos mises en œuvre (texte libre)"),
+    description: z.string().min(1).max(65500).describe("Descriptif de l'expérience (requis)"),
+  })
+  .strict();
+
 const technicalDataFields = {
   tools: z
     .array(z.string())
     .optional()
     .describe(
       "Outils / technos, format '<outil>' ou '<outil>|<niveau>'. Outil = libellé OU id setting.tool. Niveau = entier 0–5 (0 = non évalué, défaut si absent ; hors 0–5 rejeté). Ex: ['Cloud: AWS|2','React']"
+    ),
+  references: z
+    .array(referenceItem)
+    .optional()
+    .describe(
+      "Expériences professionnelles (parcours). Chaque entrée : title + description requis, plus company/location/startDate/endDate/skills. Fournir `id` pour modifier une expérience existante, l'omettre pour en créer une. mode=merge conserve les expériences existantes non citées ; mode=replace ne garde que celles fournies."
     ),
   activityAreas: z
     .array(z.string())

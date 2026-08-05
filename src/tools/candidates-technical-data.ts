@@ -198,6 +198,97 @@ export interface TechnicalDataUpdateResult {
 /** The DT fields shared by candidates and resources (everything but the entity id). */
 type TechnicalDataFields = Omit<CandidateTechnicalDataUpdateInput, "candidateId">;
 
+/** A single professional-experience entry as accepted from the caller. */
+type ReferenceInput = NonNullable<TechnicalDataFields["references"]>[number];
+
+/**
+ * The write shape of a reference (TAB_REFERENCE), matching EXACTLY the fields a
+ * live GET /technical-datas/{id} round-trips (verified on candidate #18560):
+ * id, title, company, location, startMonth/startYear, endMonth/endYear, skills,
+ * description. The dates are stored as granular month/year strings — the API's
+ * `startDate`/`endDate` are not persisted, so we never emit them.
+ */
+type ReferenceWrite = {
+  id: string;
+  title: string;
+  company?: string;
+  location?: string;
+  startMonth?: string;
+  startYear?: string;
+  endMonth?: string;
+  endYear?: string;
+  skills?: string;
+  description: string;
+};
+
+/** Split "YYYY-MM" / "YYYY-MM-DD" into { year, month } (month un-padded, 1–12). */
+function splitYearMonth(d?: string): { year?: string; month?: string } {
+  if (!d) return {};
+  const m = /^(\d{4})-(\d{2})/.exec(d);
+  if (!m) return {};
+  return { year: m[1], month: String(Number(m[2])) };
+}
+
+/**
+ * Build the stored shape of a reference. `startDate`/`endDate` are split into the
+ * granular month/year columns BoondManager actually persists (REF_DEBUT_MOIS/ANNEE,
+ * REF_FIN_MOIS/ANNEE). Only provided fields are set.
+ */
+function buildReferenceWrite(r: ReferenceInput, id: string): ReferenceWrite {
+  const w: ReferenceWrite = { id, title: r.title, description: r.description };
+  if (r.company !== undefined) w.company = r.company;
+  if (r.location !== undefined) w.location = r.location;
+  if (r.skills !== undefined) w.skills = r.skills;
+  const s = splitYearMonth(r.startDate);
+  if (s.year) {
+    w.startYear = s.year;
+    w.startMonth = s.month;
+  }
+  const e = splitYearMonth(r.endDate);
+  if (e.year) {
+    w.endYear = e.year;
+    w.endMonth = e.month;
+  }
+  return w;
+}
+
+/**
+ * Merge/replace the DT `references` array (professional experiences), keyed by id:
+ *   - an input reference WITH `id` updates the matching existing entry;
+ *   - an input reference WITHOUT `id` is a new entry, assigned a temporary
+ *     negative id (-1, -2, …) — BoondManager assigns the real id on write;
+ *   - in `merge`, existing entries not cited by id are kept verbatim; in
+ *     `replace`, only the provided references survive.
+ */
+function buildReferences(existing: unknown[], provided: ReferenceInput[], mode: "merge" | "replace"): unknown[] {
+  const out: unknown[] = [];
+  let temp = -1;
+
+  if (mode === "replace") {
+    for (const r of provided) out.push(buildReferenceWrite(r, r.id ?? String(temp--)));
+    return out;
+  }
+
+  // merge: override existing entries by id, keep the rest, append id-less new ones.
+  const overrides = new Map<string, ReferenceInput>();
+  for (const r of provided) if (r.id) overrides.set(r.id, r);
+  for (const el of existing) {
+    const eid = existingId(el);
+    const ov = overrides.get(eid);
+    if (ov) {
+      out.push(buildReferenceWrite(ov, eid));
+      overrides.delete(eid);
+    } else {
+      out.push(el);
+    }
+  }
+  // ids provided but not currently present → treat as explicit upserts.
+  for (const [id, r] of overrides) out.push(buildReferenceWrite(r, id));
+  // brand-new entries (no id).
+  for (const r of provided) if (!r.id) out.push(buildReferenceWrite(r, String(temp--)));
+  return out;
+}
+
 /** Parent entity carrying the DT — only the tdId-lookup path/label differs. */
 interface TechnicalDataParent {
   apiPath: "candidates" | "resources";
@@ -358,10 +449,15 @@ async function updateEntityTechnicalData(
     attrs["experience"] = experienceId;
     applied.push(`experience (${experienceId})`);
   }
+  if (input.references) {
+    // Professional experiences (TAB_REFERENCE) — free-text/date, no dictionary resolution.
+    attrs["references"] = buildReferences(asArray(cur["references"]), input.references, mode);
+    applied.push(`references (${(attrs["references"] as unknown[]).length})`);
+  }
 
   if (Object.keys(attrs).length === 0) {
     throw new Error(
-      "Rien à mettre à jour : fournir au moins un de tools/activityAreas/expertiseAreas/skills/experience/languages."
+      "Rien à mettre à jour : fournir au moins un de tools/activityAreas/expertiseAreas/skills/experience/languages/references."
     );
   }
 
@@ -373,7 +469,7 @@ async function updateEntityTechnicalData(
 
 /** Build the (identical-but-for-the-entity) tool description. */
 function technicalDataDescription(entityLabel: string, idField: string, apiPath: string): string {
-  return `Met à jour le Dossier Technique (DT) d'un(e) ${entityLabel} : compétences/outils, domaines, secteurs, expérience, langues.
+  return `Met à jour le Dossier Technique (DT) d'un(e) ${entityLabel} : compétences/outils, domaines, secteurs, expérience, langues, expériences professionnelles.
 
 Paramètres :
 - \`${idField}\` (requis) : ID du/de la ${entityLabel}.
@@ -381,9 +477,10 @@ Paramètres :
 - \`activityAreas\` (string[]) : domaines (\`setting.activityArea\`, hiérarchique — feuilles « Profils »/« Certifications »).
 - \`expertiseAreas\` (string[]) : secteurs, **restreints au jeu codifié S1–S12** (\`setting.expertiseArea\` dont la value contient [S1]…[S12]). Une valeur hors S1–S12 est rejetée.
 - \`skills\` (string) : texte libre des compétences.
-- \`experience\` (string) : libellé résolu en id via \`setting.experience\`.
+- \`experience\` (string) : niveau de séniorité, libellé résolu en id via \`setting.experience\` (à ne PAS confondre avec \`references\`).
 - \`languages\` (string[]) : format \`"<langue>|<niveau>"\`. Langue = libellé/id de \`setting.languageSpoken\`. Niveau = CEFR via \`setting.languageLevel\` : "A1","A2","B1","B2","C1","C2" (ou la value "B1 - Indépendant-"). Ex: ["Anglais|B2"]. En merge, le niveau d'une langue déjà présente est écrasé.
-- \`mode\` : \`merge\` (défaut, union sans doublon ; dédoublonnage par outil/langue) ou \`replace\` (remplace les seuls champs fournis).
+- \`references\` (object[]) : **expériences professionnelles** (parcours). Chaque entrée : \`title\` + \`description\` requis ; \`company\`, \`location\`, \`startDate\`/\`endDate\` ("YYYY-MM" ou "YYYY-MM-DD"), \`skills\` optionnels. Fournir \`id\` pour **modifier** une expérience existante (id lu dans le DT), l'**omettre** pour en **créer** une. Pas de résolution dictionnaire (texte libre).
+- \`mode\` : \`merge\` (défaut, union sans doublon ; dédoublonnage par outil/langue ; références fusionnées par \`id\`, existantes non citées conservées) ou \`replace\` (remplace les seuls champs fournis ; pour \`references\`, ne garde que celles passées).
 
 Résolution libellé→id insensible casse/accents (match id exact OU value). **Tout libellé non résolu est une erreur bloquante** (aucune écriture partielle ; liste des libellés en échec). Stratégie read-modify-write : lecture du tdId via /${apiPath}/{id}/technical-data, lecture du DT courant, fusion/remplacement, PUT /technical-datas/{tdId}.
 

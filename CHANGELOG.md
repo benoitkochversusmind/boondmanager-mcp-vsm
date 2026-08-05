@@ -3,6 +3,25 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.21.0] - 2026-08-05
+
+### Ajouté
+
+- **Écriture des expériences professionnelles du Dossier Technique** (`references`, table `TAB_REFERENCE`) sur les deux outils `boond_candidates_technical_data_update` et `boond_resources_technical_data_update`. Le champ officiel `references[]` de la ressource `technicaldata` (vérifié sur le schéma JSON de la doc API BoondManager) était jusqu'ici absent du connecteur : les outils DT ne couvraient que compétences/outils/domaines/secteurs/langues et le niveau de séniorité (`experience`). Désormais chaque entrée accepte `title` + `description` (requis), plus `company`, `location`, `startDate`/`endDate` (« YYYY-MM » ou « YYYY-MM-DD », découpées en mois/année stockés `REF_*_MOIS`/`ANNEE`), `skills`.
+  - **`mode: merge`** (défaut) : une entrée avec `id` met à jour l'expérience existante correspondante (les autres sont conservées telles quelles) ; une entrée sans `id` est ajoutée.
+  - **`mode: replace`** : ne conserve que les expériences fournies.
+  - Les nouvelles entrées (sans `id`) reçoivent un id temporaire négatif (`-1`, `-2`, …) ; BoondManager attribue l'id définitif à l'écriture.
+  - Texte libre — pas de résolution dictionnaire (contrairement à outils/langues/secteurs).
+  - **Forme d'écriture calée sur le round-trip live** (vérifié sur le candidat #18560) : `id, title, company, location, startMonth/startYear, endMonth/endYear, skills, description`. Les champs `startDate`/`endDate` de l'API n'étant pas persistés, ils sont acceptés en entrée (confort) mais **jamais émis** — seuls mois/année le sont.
+
+### À valider en production
+
+- Deux conventions restent à confirmer par un test d'**écriture** en prod (la lecture a confirmé la forme mais pas le comportement d'écriture) : (1) le sentinel d'id des **nouvelles** expériences (id négatif temporaire) et (2) le format du mois (`REF_*_MOIS` : non paddé « 3 » vs paddé « 03 »). La logique est isolée dans `buildReferenceWrite`/`buildReferences` (`src/tools/candidates-technical-data.ts`) pour un ajustement en une ligne si besoin.
+
+### Tests
+
+- 6 tests Vitest sur `references` (création avec id temporaire + découpage des dates, ids décroissants, merge par id avec conservation des autres, ajout après existantes, replace, omission des champs de date). Suite à **675 tests**.
+
 ## [1.20.3] - 2026-06-16
 
 ### Corrigé (anticipation d'une évolution BoondManager)

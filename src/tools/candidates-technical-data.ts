@@ -202,38 +202,47 @@ type TechnicalDataFields = Omit<CandidateTechnicalDataUpdateInput, "candidateId"
 type ReferenceInput = NonNullable<TechnicalDataFields["references"]>[number];
 
 /**
- * The mandatory string keys BoondManager validates on EVERY reference of the
- * array. If a single entry omits any of them — even with an empty-string value —
- * the API 422s the WHOLE array. So every emitted reference must carry all of
- * these, defaulting to "" when absent.
+ * Non-date string keys that stay present as "" on every reference (harmless — the
+ * API accepts empty strings for these; verified: a 422 over references never cites
+ * company/location/skills, only the date fields).
  */
-const MANDATORY_REF_KEYS = [
-  "title",
-  "company",
-  "location",
-  "startMonth",
-  "startYear",
-  "endMonth",
-  "endYear",
-  "skills",
-  "description",
-] as const;
+const STRING_REF_KEYS = ["title", "company", "location", "skills", "description"] as const;
+
+/**
+ * The granular month/year keys (REF_*_MOIS/ANNEE). BoondManager's PUT treats these
+ * as OPTIONAL numeric fields: a real value ("2020", "1") is accepted, absence is
+ * accepted, but an EMPTY STRING "" is rejected with `1002 - Wrong or missing
+ * attribute` — and one bad entry 422s the whole array. So these keys are emitted
+ * ONLY when they hold a real value, and stripped whenever empty (verified in prod:
+ * existing references stored with startMonth:"" 422'd until the empty keys were
+ * dropped; a new entry with real dates passed).
+ */
+const DATE_REF_KEYS = ["startMonth", "startYear", "endMonth", "endYear"] as const;
 
 /** A reference object of the DT payload — open shape (fields beyond the known ones are preserved). */
 type ReferenceObject = Record<string, unknown>;
 
-/** Split "YYYY-MM" / "YYYY-MM-DD" into { year, month } (month un-padded, 1–12). */
-function splitYearMonth(d?: string): { year: string; month: string } {
-  if (!d) return { year: "", month: "" };
+/** Split "YYYY-MM" / "YYYY-MM-DD" into { year, month } (month un-padded, 1–12); null-ish when absent. */
+function splitYearMonth(d?: string): { year?: string; month?: string } {
+  if (!d) return {};
   const m = /^(\d{4})-(\d{2})/.exec(d);
-  if (!m) return { year: "", month: "" };
+  if (!m) return {};
   return { year: m[1], month: String(Number(m[2])) };
 }
 
-/** Ensure every mandatory key is present on the object ("" when missing). Mutates & returns. */
-function fillMandatoryRefKeys(o: ReferenceObject): ReferenceObject {
-  for (const k of MANDATORY_REF_KEYS) {
+/** Fill each non-date mandatory string key with "" when absent. Mutates & returns. */
+function fillStringRefKeys(o: ReferenceObject): ReferenceObject {
+  for (const k of STRING_REF_KEYS) {
     if (o[k] === undefined || o[k] === null) o[k] = "";
+  }
+  return o;
+}
+
+/** Drop any month/year key that is empty/absent — the API rejects "" for these. Mutates & returns. */
+function stripEmptyDateKeys(o: ReferenceObject): ReferenceObject {
+  for (const k of DATE_REF_KEYS) {
+    const v = o[k];
+    if (v === undefined || v === null || v === "") delete o[k];
   }
   return o;
 }
@@ -245,7 +254,7 @@ function fillMandatoryRefKeys(o: ReferenceObject): ReferenceObject {
  * and silently 422s the whole array if any is dropped. Input fields then override.
  * `startDate`/`endDate` are split into the granular month/year columns the API
  * persists (REF_*_MOIS/ANNEE); the non-persisted `startDate`/`endDate` are never
- * emitted. All mandatory keys are guaranteed present ("" when absent).
+ * emitted. Empty month/year keys are stripped (the API rejects "" for them).
  */
 function buildReferenceWrite(r: ReferenceInput, id: string, base?: ReferenceObject): ReferenceObject {
   const o: ReferenceObject = base ? { ...base } : {};
@@ -265,21 +274,21 @@ function buildReferenceWrite(r: ReferenceInput, id: string, base?: ReferenceObje
     o.endMonth = e.month;
     o.endYear = e.year;
   }
-  return fillMandatoryRefKeys(o);
+  fillStringRefKeys(o);
+  return stripEmptyDateKeys(o);
 }
 
 /**
  * Re-serialize an EXISTING reference (read back from the DT) for a merge PUT.
- * Preserves EVERY field the read returned — no whitelist, no dropping — and only
- * fills in the mandatory keys the read may have omitted (BoondManager omits
- * empty-valued keys in its GET). This guards against the API rejecting the array
- * over a field that existing references legitimately carry but a plain re-emit
- * would lose.
+ * Preserves EVERY field the read returned — no whitelist, no dropping — fills the
+ * mandatory string keys, and strips empty month/year keys (BoondManager stores
+ * dateless references with startMonth:"" but its PUT rejects that empty string).
  */
 function normalizeExistingReference(el: unknown): ReferenceObject {
   const o: ReferenceObject = el && typeof el === "object" ? { ...(el as ReferenceObject) } : {};
   o.id = o.id !== undefined && o.id !== null ? String(o.id) : "";
-  return fillMandatoryRefKeys(o);
+  fillStringRefKeys(o);
+  return stripEmptyDateKeys(o);
 }
 
 /**

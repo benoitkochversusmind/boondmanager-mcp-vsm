@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.21.3] - 2026-08-05
+
+### Corrigé
+
+- **Écriture des expériences professionnelles : la bonne cause enfin identifiée (via un essai de diagnostic en prod).** Le corps exact du 422 (`1002 - Wrong or missing attribute` sur `references/N/startMonth|startYear|endMonth|endYear`, uniquement les entrées à date vide, jamais l'entrée à dates réelles) montre que **l'API rejette la chaîne vide `""`** pour les quatre champs mois/année — l'inverse de l'hypothèse initiale. Le message « Wrong **or** missing » est le code 1002 générique ; ici c'est **« Wrong »** (valeur invalide), pas « missing » : le schéma POST marque ces champs comme **optionnels**, et l'erreur ne cite jamais `company`/`location`/`skills` (qui, eux, acceptent `""`). Correctif : les quatre champs mois/année ne sont désormais émis **que** lorsqu'ils portent une valeur réelle, et **retirés** dès qu'ils sont vides (nouvelles entrées sans date **et** entrées existantes stockées avec `startMonth:""`). Les autres chaînes restent `""`. Format du mois confirmé **non paddé** (`"1"` accepté). Ceci clôt les régressions 1.21.1/1.21.2 (qui envoyaient `""`).
+
 ## [1.21.2] - 2026-08-05
 
 ### Corrigé

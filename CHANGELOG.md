@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.21.4] - 2026-08-06
+
+### Corrigé (incident connecteur)
+
+- **Connexion au connecteur en échec (« L'autorisation a échoué » côté Claude.ai) — RFC 9728 manquant.** Après les redéploiements du 2026-08-05 (qui vident les sessions OAuth en mémoire), plusieurs utilisateurs ne pouvaient plus se (re)connecter : l'OAuth aboutissait côté serveur (auth code + session créés dans les logs) mais Claude.ai n'ouvrait jamais le transport MCP, en boucle. Cause : la **spec d'autorisation MCP (2025-06-18) impose aux serveurs d'exposer OAuth 2.0 Protected Resource Metadata (RFC 9728)** et aux clients de l'utiliser pour la découverte du serveur d'autorisation. Le serveur ne servait pas `/.well-known/oauth-protected-resource` (404) et le `WWW-Authenticate` d'un 401 pointait `resource_metadata` vers `/.well-known/oauth-authorization-server` (mauvais document). Les sessions longues antérieures ne repassaient jamais par la découverte, d'où « ça marchait avant ».
+  - Ajout du endpoint **`GET /.well-known/oauth-protected-resource`** (RFC 9728) renvoyant `resource`, `authorization_servers`, `scopes_supported`, `bearer_methods_supported` ; servi aussi sur les chemins suffixés (`…/oauth-protected-resource/sse`, `…/mcp`) pour couvrir la forme d'insertion de chemin RFC 9728 §3.1.
+  - Correction du header **`WWW-Authenticate`** (dans `resolveUser`) : `resource_metadata` pointe désormais vers `/.well-known/oauth-protected-resource`.
+  - Aucun changement de transport ni d'outil. Le transport Streamable HTTP (`/sse` et `/mcp`) était déjà fonctionnel.
+
 ## [1.21.3] - 2026-08-05
 
 ### Corrigé

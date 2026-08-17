@@ -208,7 +208,7 @@ async function resolveUser(
   if (!provided) {
     res.setHeader(
       "WWW-Authenticate",
-      `Bearer realm="${MCP_BASE_URL}", resource_metadata="${MCP_BASE_URL}/.well-known/oauth-authorization-server"`
+      `Bearer realm="${MCP_BASE_URL}", resource_metadata="${MCP_BASE_URL}/.well-known/oauth-protected-resource"`
     );
     res.status(401).json({ error: "unauthorized", error_description: "Authentication required" });
     return null;
@@ -360,6 +360,23 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
     scopes_supported: ["openid", "email", "profile"],
+  });
+});
+
+// ── Protected Resource Metadata (RFC 9728) ───────────────────────────────────
+// REQUIRED by the MCP authorization spec (2025-06-18): the client discovers the
+// authorization server from this document. Without it, a spec-compliant client
+// (Claude.ai) cannot complete discovery and the connector fails with a generic
+// "authorization failed". Served both at the bare well-known path and at any
+// resource-suffixed path (…/oauth-protected-resource/sse, …/mcp) so both the
+// explicit `resource_metadata` URL and the RFC 9728 §3.1 path-insertion form
+// resolve to the same document.
+app.get(["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/*"], (_req, res) => {
+  res.json({
+    resource: MCP_BASE_URL,
+    authorization_servers: [MCP_BASE_URL],
+    scopes_supported: ["openid", "email", "profile"],
+    bearer_methods_supported: ["header"],
   });
 });
 

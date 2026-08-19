@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.22.0] - 2026-08-18
+
+### Ajouté
+
+- **Lecture des lignes d'une facture client — 2 vues complémentaires.** Deux nouveaux outils en lecture seule (le serveur expose **182 outils**) :
+  - **`boond_invoices_billable_items`** — les **éléments facturables** qui composent la facture (endpoint `GET /invoices/{id}/billable-items`) : temps, temps exceptionnels, chiffre d'affaires additionnel, achats, frais, échéances, chacun rattaché à son projet/mission. Vue « traçabilité » (ce qui justifie les montants). Collection paginée automatiquement jusqu'au total via `fetchTabResponse`.
+  - **`boond_invoices_information`** — le **contenu détaillé** de la facture (endpoint `GET /invoices/{id}/information`), incluant les **lignes imprimées** telles qu'elles figurent sur le document (libellés, quantités, montants HT/TTC, TVA). Vue « décomposition comptable ».
+  - Les deux passent par le `buildTabHandler` partagé (formatage auto, mêmes garde-fous que les autres onglets). Arg unique : `id` de la facture. 2 tests ajoutés (câblage des endpoints). Suite à **681 tests**.
+
+### À valider en production
+
+- Le connecteur live étant momentanément déconnecté au moment du dev, le **rendu exact** des deux sorties (champs de ligne surfacés) sera confirmé sur une vraie facture après déploiement. Les endpoints sont confirmés sur la doc API ; le formatage passe par les helpers existants (aucune supposition de nom de champ bloquante).
+
 ## [1.21.4] - 2026-08-06
 
 ### Corrigé (incident connecteur)

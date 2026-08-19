@@ -144,9 +144,9 @@ describe("registerInvoiceTools", () => {
     dictionaryService.resetDictionaryCacheForTests();
   });
 
-  it("should register 6 invoice tools", () => {
+  it("should register 8 invoice tools", () => {
     registerInvoiceTools(server);
-    expect(server.registerTool).toHaveBeenCalledTimes(6);
+    expect(server.registerTool).toHaveBeenCalledTimes(8);
   });
 
   it("should register all expected tool names", () => {
@@ -158,15 +158,23 @@ describe("registerInvoiceTools", () => {
     expect(names).toContain("boond_invoices_update");
     expect(names).toContain("boond_invoices_delete");
     expect(names).toContain("boond_invoices_overdue");
+    expect(names).toContain("boond_invoices_billable_items");
+    expect(names).toContain("boond_invoices_information");
   });
 
-  it("should register search, get and overdue as readOnly", () => {
+  it("should register search, get, overdue and both line-view tabs as readOnly", () => {
     registerInvoiceTools(server);
-    const readOnlyNames = ["boond_invoices_search", "boond_invoices_get", "boond_invoices_overdue"];
+    const readOnlyNames = [
+      "boond_invoices_search",
+      "boond_invoices_get",
+      "boond_invoices_overdue",
+      "boond_invoices_billable_items",
+      "boond_invoices_information",
+    ];
     const readOnlyCalls = vi
       .mocked(server.registerTool)
       .mock.calls.filter((c) => typeof c[0] === "string" && readOnlyNames.includes(c[0] as string));
-    expect(readOnlyCalls).toHaveLength(3);
+    expect(readOnlyCalls).toHaveLength(5);
     for (const call of readOnlyCalls) {
       expect(call[1].annotations?.readOnlyHint).toBe(true);
     }
@@ -176,6 +184,30 @@ describe("registerInvoiceTools", () => {
     registerInvoiceTools(server);
     const deleteCall = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_invoices_delete");
     expect(deleteCall?.[1].annotations?.destructiveHint).toBe(true);
+  });
+
+  it("boond_invoices_billable_items fetches /invoices/{id}/billable-items", async () => {
+    const tabSpy = vi.spyOn(boondClient, "fetchTabResponse").mockResolvedValue({ data: [] } as never);
+    registerInvoiceTools(server);
+    const handler = vi
+      .mocked(server.registerTool)
+      .mock.calls.find((c) => c[0] === "boond_invoices_billable_items")![2] as (
+      p: Record<string, unknown>
+    ) => Promise<{ content: { text: string }[] }>;
+    await handler({ id: "42" });
+    expect(tabSpy).toHaveBeenCalledWith("/invoices/42/billable-items");
+  });
+
+  it("boond_invoices_information fetches /invoices/{id}/information", async () => {
+    const tabSpy = vi.spyOn(boondClient, "fetchTabResponse").mockResolvedValue({ data: {} } as never);
+    registerInvoiceTools(server);
+    const handler = vi
+      .mocked(server.registerTool)
+      .mock.calls.find((c) => c[0] === "boond_invoices_information")![2] as (
+      p: Record<string, unknown>
+    ) => Promise<{ content: { text: string }[] }>;
+    await handler({ id: "42" });
+    expect(tabSpy).toHaveBeenCalledWith("/invoices/42/information");
   });
 
   it("boond_invoices_search uses nested include for order.company", async () => {

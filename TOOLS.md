@@ -3,7 +3,7 @@
 > Auto-generated from the server registrations. Do not edit by hand.
 > Regenerate with `npm run docs:tools` (CI fails if this file is stale).
 
-**180 tools** across **38 domains** · **12 prompts** · **21 resources**.
+**182 tools** across **38 domains** · **12 prompts** · **21 resources**.
 
 Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destructiveHint), `idempotent` (idempotentHint), `open-world` (openWorldHint, e.g. paginated keyword search).
 
@@ -163,13 +163,15 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_flags_get` | Détails d'un drapeau/étiquette | read · idempotent |
 | `boond_flags_search` | Rechercher des drapeaux/étiquettes | read · idempotent · open-world |
 
-### invoices (6)
+### invoices (8)
 
 | Tool | Title | Hints |
 |---|---|---|
+| `boond_invoices_billable_items` | Éléments facturables d'une facture | read · idempotent |
 | `boond_invoices_create` | Créer une facture | write |
 | `boond_invoices_delete` | Supprimer une facture | delete |
 | `boond_invoices_get` | Détails d'une facture | read · idempotent |
+| `boond_invoices_information` | Contenu et lignes imprimées d'une facture | read · idempotent |
 | `boond_invoices_overdue` | Factures en retard de paiement | read · idempotent · open-world |
 | `boond_invoices_search` | Rechercher des factures | read · idempotent · open-world |
 | `boond_invoices_update` | Modifier une facture | write · idempotent |

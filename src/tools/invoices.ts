@@ -11,7 +11,15 @@ import { apiRequest, buildSearchQuery, formatDetailResponse } from "../services/
 import { CHARACTER_LIMIT } from "../constants.js";
 import { getDictionary, resolveDictionaryPath } from "../services/dictionary.js";
 import type { JsonApiResource, JsonApiResponse } from "../types.js";
-import { buildJsonApiBody } from "./crud-factory.js";
+import { buildJsonApiBody, buildTabHandler } from "./crud-factory.js";
+
+// Read-only tab tools (invoice billable items + information/printed lines).
+const INVOICE_TAB_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
 
 /**
  * ⚠️ Date pivot pour le recouvrement BoondManager
@@ -570,6 +578,44 @@ export function registerInvoiceTools(server: McpServer): void {
         content: [{ type: "text" as const, text: `🗑️ Facture #${params.id} supprimée.` }],
       };
     }
+  );
+
+  // ── Lignes de facture — deux vues complémentaires ──────────────────────────
+  // 1) Éléments facturables (`/invoices/{id}/billable-items`) : les éléments
+  //    granulaires qui COMPOSENT la facture, typés (temps, temps exceptionnels,
+  //    CA additionnel, achats, frais, échéances). Collection paginée : le
+  //    handler pagine jusqu'au total via fetchTabResponse.
+  server.registerTool(
+    "boond_invoices_billable_items",
+    {
+      title: "Éléments facturables d'une facture",
+      description:
+        "Liste les **éléments facturables** qui composent une facture client (endpoint /invoices/{id}/billable-items) : " +
+        "temps, temps exceptionnels, chiffre d'affaires additionnel, achats, frais, échéances — chacun rattaché à son " +
+        "projet/mission. C'est la vue « traçabilité » : ce qui justifie les montants de la facture. " +
+        "Collection paginée automatiquement jusqu'au total. Arg : `id` (ID de la facture).",
+      inputSchema: IdSchema,
+      annotations: INVOICE_TAB_ANNOTATIONS,
+    },
+    buildTabHandler("/invoices", "invoice", "billable-items")
+  );
+
+  // 2) Informations / lignes imprimées (`/invoices/{id}/information`) : le
+  //    contenu éditable de la facture, incluant les lignes telles qu'elles
+  //    apparaissent sur le document (libellés, quantités, montants HT/TTC, TVA).
+  server.registerTool(
+    "boond_invoices_information",
+    {
+      title: "Contenu et lignes imprimées d'une facture",
+      description:
+        "Récupère le **contenu détaillé** d'une facture client (endpoint /invoices/{id}/information), incluant les " +
+        "**lignes imprimées** telles qu'elles figurent sur le document : libellés, quantités, montants HT/TTC et TVA. " +
+        "C'est la vue « décomposition comptable » de la facture, complémentaire de `boond_invoices_billable_items` " +
+        "(éléments facturables sources). Arg : `id` (ID de la facture).",
+      inputSchema: IdSchema,
+      annotations: INVOICE_TAB_ANNOTATIONS,
+    },
+    buildTabHandler("/invoices", "invoice", "information")
   );
 }
 

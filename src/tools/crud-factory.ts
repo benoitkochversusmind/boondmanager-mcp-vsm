@@ -11,6 +11,7 @@ import {
 } from "../services/boond-client.js";
 import { SearchSchema, IdSchema, IdTabSchema } from "../schemas/index.js";
 import type { SearchInput, IdInput, IdTabInput } from "../schemas/index.js";
+import type { JsonApiResponse } from "../types.js";
 import { formatActionsList } from "./actions.js";
 import { formatPositioningsList } from "./positionings.js";
 
@@ -233,7 +234,8 @@ export function registerUpdateTool(
   server: McpServer,
   opts: CrudToolOptions,
   schema: z.ZodType,
-  buildBody: (params: Record<string, unknown>) => unknown | Promise<unknown>
+  buildBody: (params: Record<string, unknown>) => unknown | Promise<unknown>,
+  updateVia?: { subResource: string }
 ): void {
   server.registerTool(
     `${opts.prefix}_update`,
@@ -263,7 +265,23 @@ Returns: Données mises à jour du/de la ${opts.entityName}.`,
           content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }],
         };
       }
-      const response = await apiRequest(`${opts.apiPath}/${id}`, "PATCH", body);
+      // Some entities reject a bare PATCH/PUT on the base resource (405) and are
+      // written through an `/information` sub-resource instead (verified in prod
+      // for candidates AND companies). `updateVia` routes to
+      // `PUT /{apiPath}/{id}/{subResource}` with a POST fallback on 404/405.
+      let response: JsonApiResponse;
+      if (updateVia) {
+        const path = `${opts.apiPath}/${id}/${updateVia.subResource}`;
+        try {
+          response = await apiRequest(path, "PUT", body);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/\b40[45]\b/.test(msg)) response = await apiRequest(path, "POST", body);
+          else throw err;
+        }
+      } else {
+        response = await apiRequest(`${opts.apiPath}/${id}`, "PATCH", body);
+      }
       return {
         content: [
           {

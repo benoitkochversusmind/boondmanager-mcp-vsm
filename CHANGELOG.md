@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.23.1] - 2026-08-28
+
+### Corrigé (validation prod de 1.23.0)
+
+- **`boond_companies_update` / `boond_contacts_update` : `PATCH /{entity}/{id}` renvoyait `405 Method Not Allowed`** — l'update passait par le factory CRUD générique en PATCH sur la ressource de base, verbe rejeté par l'API BoondManager (même comportement que les candidats, mais ces deux outils étaient restés sur le PATCH générique). Ces updates étaient donc **inopérants** (pas seulement l'affectation ajoutée en 1.23.0, tous les champs). Désormais l'écriture est routée vers **`PUT /{entity}/{id}/information`** (repli `POST` automatique sur 404/405), via une option `updateVia` du factory `registerUpdateTool`. Chemin validé en production : la modification du **pôle d'un candidat** (via `/information`) persiste (fresh GET), et la **résolution par libellé** de l'affectation est validée (« Lab R & D » → pôle #44). Le routage société/contact via `/information` reprend le même schéma éprouvé.
+
+### Validé en production (1.23.0)
+
+- Écriture de l'affectation (mainManager/agency/pole) : **persistance confirmée sur candidat** (pole #17 → #44 → #17, vérifiée par relecture) ; **résolution libellé→id confirmée**. Sociétés/contacts : à re-tester après ce correctif de routage.
+
 ## [1.23.0] - 2026-08-18
 
 ### Ajouté

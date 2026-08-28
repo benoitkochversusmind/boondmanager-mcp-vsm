@@ -137,16 +137,22 @@ export function registerContactTools(server: McpServer): void {
     return body;
   });
 
-  registerUpdateTool(server, OPTS, ContactUpdateSchema, async (params) => {
-    const { id, mainManager, agency, pole, ...attrs } = params;
-    const { relationships, rejected } = await resolveOrgRelationships({
-      mainManager: mainManager as string | undefined,
-      agency: agency as string | undefined,
-      pole: pole as string | undefined,
-    });
-    if (rejected.length > 0) throw orgAssignmentError(rejected);
-    return buildJsonApiBody("contact", attrs, id as string, relationships);
-  });
+  registerUpdateTool(
+    server,
+    OPTS,
+    ContactUpdateSchema,
+    async (params) => {
+      const { id, mainManager, agency, pole, ...attrs } = params;
+      const { relationships, rejected } = await resolveOrgRelationships({
+        mainManager: mainManager as string | undefined,
+        agency: agency as string | undefined,
+        pole: pole as string | undefined,
+      });
+      if (rejected.length > 0) throw orgAssignmentError(rejected);
+      return buildJsonApiBody("contact", attrs, id as string, relationships);
+    },
+    { subResource: "information" }
+  );
 
   registerDeleteTool(server, OPTS);
 

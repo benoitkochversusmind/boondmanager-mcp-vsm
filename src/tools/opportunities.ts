@@ -14,6 +14,7 @@ import {
   buildJsonApiBody,
   buildTabHandler,
 } from "./crud-factory.js";
+import { resolveOrgRelationships, orgAssignmentError } from "./org-assignment.js";
 
 const OPTS = {
   entityName: "opportunité",
@@ -130,10 +131,22 @@ export function registerOpportunityTools(server: McpServer): void {
     return body;
   });
 
-  registerUpdateTool(server, OPTS, OpportunityUpdateSchema, (params) => {
-    const { id, ...attrs } = params;
-    return buildJsonApiBody("opportunity", attrs, id as string);
-  });
+  registerUpdateTool(
+    server,
+    OPTS,
+    OpportunityUpdateSchema,
+    async (params) => {
+      const { id, mainManager, agency, pole, ...attrs } = params;
+      const { relationships, rejected } = await resolveOrgRelationships({
+        mainManager: mainManager as string | undefined,
+        agency: agency as string | undefined,
+        pole: pole as string | undefined,
+      });
+      if (rejected.length > 0) throw orgAssignmentError(rejected);
+      return buildJsonApiBody("opportunity", attrs, id as string, relationships);
+    },
+    { subResource: "information" }
+  );
 
   registerDeleteTool(server, OPTS);
 

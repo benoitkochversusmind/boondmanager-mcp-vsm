@@ -530,9 +530,31 @@ export const CandidateCreateSchema = z
 // `setting.evaluation` id, so BoondManager echoed it but never stored it. The
 // tool now resolves the input against the dictionary (label OR id) and blocks
 // on an unresolved value — no more false success. See updateCandidateInformation.
+// ---- Org assignment (mainManager / agency / pole) — shared by the three ----
+// entity updates (candidates, contacts, companies). Each accepts an ID (fast
+// path) or a label resolved by name. Sent as JSON:API relationships, not
+// attributes. See src/tools/org-assignment.ts.
+const orgAssignmentFields = {
+  mainManager: z
+    .string()
+    .optional()
+    .describe(
+      "Responsable principal : ID de la ressource OU nom (« Prénom Nom », résolu via /resources). " +
+        "Réaffecter le responsable modifie le rattachement organisationnel de la fiche."
+    ),
+  agency: z.string().optional().describe("Agence de rattachement : ID OU libellé (résolu via /agencies)."),
+  pole: z
+    .string()
+    .optional()
+    .describe(
+      "Pôle de rattachement : ID OU libellé (résolu via /poles). Relation directe — fixe le pôle explicitement."
+    ),
+} as const;
+
 export const CandidateUpdateSchema = z
   .object({
     id: z.string().min(1).describe("ID du candidat à modifier"),
+    ...orgAssignmentFields,
     firstName: z.string().optional().describe("Prénom"),
     lastName: z.string().optional().describe("Nom"),
     title: z.string().optional().describe("Titre / fonction du candidat"),
@@ -742,6 +764,7 @@ export const ContactCreateSchema = z
 export const ContactUpdateSchema = z
   .object({
     id: z.string().min(1).describe("ID du contact à modifier"),
+    ...orgAssignmentFields,
     firstName: z.string().optional().describe("Prénom"),
     lastName: z.string().optional().describe("Nom"),
     email1: z.string().email().optional().describe("Email"),
@@ -771,6 +794,7 @@ export const CompanyCreateSchema = z
 export const CompanyUpdateSchema = z
   .object({
     id: z.string().min(1).describe("ID de la société à modifier"),
+    ...orgAssignmentFields,
     name: z.string().optional().describe("Nom"),
     email1: z.string().email().optional().describe("Email"),
     phone1: z.string().optional().describe("Téléphone"),

@@ -164,16 +164,22 @@ export function registerCompanyTools(server: McpServer): void {
     return buildJsonApiBody("company", attrs);
   });
 
-  registerUpdateTool(server, OPTS, CompanyUpdateSchema, async (params) => {
-    const { id, mainManager, agency, pole, ...attrs } = params;
-    const { relationships, rejected } = await resolveOrgRelationships({
-      mainManager: mainManager as string | undefined,
-      agency: agency as string | undefined,
-      pole: pole as string | undefined,
-    });
-    if (rejected.length > 0) throw orgAssignmentError(rejected);
-    return buildJsonApiBody("company", attrs, id as string, relationships);
-  });
+  registerUpdateTool(
+    server,
+    OPTS,
+    CompanyUpdateSchema,
+    async (params) => {
+      const { id, mainManager, agency, pole, ...attrs } = params;
+      const { relationships, rejected } = await resolveOrgRelationships({
+        mainManager: mainManager as string | undefined,
+        agency: agency as string | undefined,
+        pole: pole as string | undefined,
+      });
+      if (rejected.length > 0) throw orgAssignmentError(rejected);
+      return buildJsonApiBody("company", attrs, id as string, relationships);
+    },
+    { subResource: "information" }
+  );
 
   registerDeleteTool(server, OPTS);
 

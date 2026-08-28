@@ -80,9 +80,9 @@ describe("registerCompanyTools", () => {
       p: Record<string, unknown>
     ) => Promise<{ isError?: boolean }>;
     await handler({ id: "10", name: "ACME", mainManager: "42", agency: "5", pole: "3" });
-    const patch = api.mock.calls.find((c) => c[1] === "PATCH");
-    expect(patch![0]).toBe("/companies/10");
-    const body = patch![2] as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> } };
+    const put = api.mock.calls.find((c) => c[1] === "PUT");
+    expect(put![0]).toBe("/companies/10/information"); // routed via /information sub-resource (base PATCH = 405)
+    const body = put![2] as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> } };
     expect(body.data.relationships).toEqual({
       mainManager: { data: { id: "42", type: "resource" } },
       agency: { data: { id: "5", type: "agency" } },

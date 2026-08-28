@@ -823,12 +823,13 @@ export const OpportunityCreateSchema = z
 
 export const OpportunityUpdateSchema = z
   .object({
-    id: z.string().min(1).describe("ID de l'opportunité à modifier"),
+    id: z.string().min(1).describe("ID de l'opportunité (besoin) à modifier"),
     name: z.string().optional().describe("Nom / titre"),
     state: z.number().int().optional().describe("État"),
     startDate: z.string().optional().describe("Date de début (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Date de fin (YYYY-MM-DD)"),
     note: z.string().optional().describe("Notes"),
+    ...orgAssignmentFields,
   })
   .strict();
 

@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.24.0] - 2026-08-28
+
+### Ajouté
+
+- **Affectation organisationnelle sur les opportunités (besoins)** — `boond_opportunities_update` accepte désormais `mainManager`, `agency` et `pole` (id ou libellé, résolus via /resources, /agencies, /poles ; garde-fou bloquant si non résolu), envoyés en relations JSON:API. Confirmé sur l'API : l'opportunité expose bien ces trois relations (vérifié sur une vraie opportunité). Comme pour candidats/contacts/sociétés, l'écriture est routée via **`PUT /opportunities/{id}/information`** (repli POST) — le PATCH base est également rejeté (405). Permet de **changer le pôle (ou le responsable / l'agence) d'un besoin**. 1 test ajouté. Suite à **692 tests**.
+
 ## [1.23.1] - 2026-08-28
 
 ### Corrigé (validation prod de 1.23.0)

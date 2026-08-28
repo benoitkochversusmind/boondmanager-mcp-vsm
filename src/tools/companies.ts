@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CompanyCreateSchema, CompanyUpdateSchema, CompanySearchSchema, IdSchema } from "../schemas/index.js";
+import { resolveOrgRelationships, orgAssignmentError } from "./org-assignment.js";
 import {
   registerSearchTool,
   registerGetToolMerged,
@@ -163,9 +164,15 @@ export function registerCompanyTools(server: McpServer): void {
     return buildJsonApiBody("company", attrs);
   });
 
-  registerUpdateTool(server, OPTS, CompanyUpdateSchema, (params) => {
-    const { id, ...attrs } = params;
-    return buildJsonApiBody("company", attrs, id as string);
+  registerUpdateTool(server, OPTS, CompanyUpdateSchema, async (params) => {
+    const { id, mainManager, agency, pole, ...attrs } = params;
+    const { relationships, rejected } = await resolveOrgRelationships({
+      mainManager: mainManager as string | undefined,
+      agency: agency as string | undefined,
+      pole: pole as string | undefined,
+    });
+    if (rejected.length > 0) throw orgAssignmentError(rejected);
+    return buildJsonApiBody("company", attrs, id as string, relationships);
   });
 
   registerDeleteTool(server, OPTS);

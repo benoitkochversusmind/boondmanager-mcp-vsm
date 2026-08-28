@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.23.0] - 2026-08-18
+
+### Ajouté
+
+- **Affectation organisationnelle en écriture (responsable / agence / pôle)** sur les trois fiches modifiables : `boond_candidates_update`, `boond_contacts_update`, `boond_companies_update`. Trois nouveaux champs, exposés par l'API BoondManager comme **relations JSON:API** sur ces entités (confirmé sur le schéma officiel) :
+  - **`mainManager`** — responsable principal (relation `resource`). Le réaffecter modifie le rattachement de la fiche.
+  - **`agency`** — agence (relation `agency`).
+  - **`pole`** — pôle (relation `pole`, **directe** — le pôle peut être fixé explicitement, pas seulement hérité de l'agence).
+  - Chaque champ accepte un **ID** (voie rapide) **OU un libellé** résolu par nom (responsable via `/resources`, agence via `/agencies`, pôle via `/poles`, insensible casse/accents). Un libellé **non résolu** (0 ou plusieurs correspondances) ou une recherche en échec = **erreur bloquante, aucune écriture** (pas de write partiel). Envoyés en `data.relationships` (helper mutualisé `src/tools/org-assignment.ts` ; `buildJsonApiBody` accepte désormais des relations ; le factory `registerUpdateTool` supporte un `buildBody` asynchrone). 10 tests ajoutés. Suite à **691 tests**.
+
+### À valider en production
+
+- Le connecteur live étant déconnecté au moment du dev, le **routage d'écriture** reste à confirmer sur une vraie fiche : sociétés/contacts via `PATCH /{entity}/{id}` (chemin existant) ; **candidats** via `PUT /candidates/{id}/information` (repli POST) — le base `PUT /candidates/{id}` renvoie 405, donc les relations passent par `/information` ; à vérifier que BoondManager les persiste bien par ce chemin (sinon ajuster le sous-endpoint). La résolution libellé→id sera aussi validée sur les vrais /resources, /agencies, /poles.
+
 ## [1.22.0] - 2026-08-18
 
 ### Ajouté

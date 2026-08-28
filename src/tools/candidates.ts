@@ -8,6 +8,7 @@ import {
   buildJsonApiBody,
   buildTabHandler,
 } from "./crud-factory.js";
+import { resolveOrgRelationships, orgAssignmentError } from "./org-assignment.js";
 import { apiRequest, buildSearchQuery, formatListResponse, formatDetailResponse } from "../services/boond-client.js";
 import { getStateMap, getDictionary, resolveDictionaryPath } from "../services/dictionary.js";
 import type { JsonApiResource, JsonApiResponse } from "../types.js";
@@ -186,9 +187,9 @@ async function handleCandidateSearch(params: CandidateSearchInput): Promise<{
 // with a POST fallback on 404/405 (the verb is instance-dependent on the
 // external API — mirrors boond_candidates_administrative_update).
 
-const CANDIDATE_UPDATE_DESCRIPTION = `Met à jour la fiche **information** d'un candidat (coordonnées + évaluation globale). Champs : \`firstName\`, \`lastName\`, \`title\`, \`email1\`/\`email2\`/\`email3\`, \`phone1\`/\`phone2\`/\`phone3\`, \`address\`, \`postcode\`, \`town\` (ville), \`country\`, \`globalEvaluation\` (libellé/id \`setting.evaluation\`, ex: 'A'/'B'/'C'/'D' ; '-1' = non évaluée), \`informationComments\`.
+const CANDIDATE_UPDATE_DESCRIPTION = `Met à jour la fiche **information** d'un candidat (coordonnées + évaluation globale) et son **affectation organisationnelle**. Champs : \`firstName\`, \`lastName\`, \`title\`, \`email1\`/\`email2\`/\`email3\`, \`phone1\`/\`phone2\`/\`phone3\`, \`address\`, \`postcode\`, \`town\` (ville), \`country\`, \`globalEvaluation\` (libellé/id \`setting.evaluation\`, ex: 'A'/'B'/'C'/'D' ; '-1' = non évaluée), \`informationComments\`, \`mainManager\` (responsable principal), \`agency\` (agence), \`pole\` (pôle).
 
-Seuls les champs fournis sont modifiés. \`globalEvaluation\` est résolu via le dictionnaire \`setting.evaluation\` (libellé OU id) ; une valeur invalide est une **erreur bloquante** (pas de faux succès). Pour la disponibilité, la mobilité, les salaires/TJM, le contrat souhaité ou la situation, utiliser \`boond_candidates_administrative_update\` ; pour le dossier technique, \`boond_candidates_technical_data_update\`.
+Seuls les champs fournis sont modifiés. \`globalEvaluation\` est résolu via le dictionnaire \`setting.evaluation\` (libellé OU id) ; une valeur invalide est une **erreur bloquante** (pas de faux succès). \`mainManager\`/\`agency\`/\`pole\` acceptent un **ID ou un libellé** (résolu via /resources, /agencies, /poles) et sont envoyés en **relations JSON:API** ; un libellé non résolu (0 ou plusieurs correspondances) est une **erreur bloquante** sans écriture. Réaffecter \`mainManager\` ou fixer \`pole\` change le rattachement de la fiche. Pour la disponibilité, la mobilité, les salaires/TJM, le contrat souhaité ou la situation, utiliser \`boond_candidates_administrative_update\` ; pour le dossier technique, \`boond_candidates_technical_data_update\`.
 
 Écriture : \`PUT /candidates/{id}/information\` (repli \`POST\` automatique).`;
 
@@ -242,7 +243,7 @@ async function resolveGlobalEvaluation(raw: string): Promise<string> {
 export async function updateCandidateInformation(
   input: CandidateUpdateInput
 ): Promise<{ response: JsonApiResponse; applied: string[] }> {
-  const { id, globalEvaluation, ...fields } = input;
+  const { id, globalEvaluation, mainManager, agency, pole, ...fields } = input;
   const attrs: Record<string, unknown> = {};
   const applied: string[] = [];
   for (const [key, value] of Object.entries(fields)) {
@@ -256,14 +257,20 @@ export async function updateCandidateInformation(
     attrs.globalEvaluation = await resolveGlobalEvaluation(globalEvaluation);
     applied.push("globalEvaluation");
   }
+  // Resolve org assignment (mainManager / agency / pole) → JSON:API relationships.
+  // Blocking on any unresolved label — no partial write.
+  const { relationships, rejected } = await resolveOrgRelationships({ mainManager, agency, pole });
+  if (rejected.length > 0) throw orgAssignmentError(rejected);
+  for (const key of Object.keys(relationships)) applied.push(key);
+
   if (applied.length === 0) {
     throw new Error(
-      "Rien à mettre à jour : fournir au moins un champ (firstName, town, postcode, globalEvaluation, …)."
+      "Rien à mettre à jour : fournir au moins un champ (firstName, town, postcode, globalEvaluation, mainManager, agency, pole, …)."
     );
   }
 
   const infoPath = `/candidates/${id}/information`;
-  const body = buildJsonApiBody("candidate", attrs, id);
+  const body = buildJsonApiBody("candidate", attrs, id, relationships);
   let response: JsonApiResponse;
   try {
     response = await apiRequest(infoPath, "PUT", body);

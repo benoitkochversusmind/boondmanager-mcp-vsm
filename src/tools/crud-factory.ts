@@ -196,7 +196,7 @@ export function registerCreateTool(
   server: McpServer,
   opts: CrudToolOptions,
   schema: z.ZodType,
-  buildBody: (params: Record<string, unknown>) => unknown
+  buildBody: (params: Record<string, unknown>) => unknown | Promise<unknown>
 ): void {
   server.registerTool(
     `${opts.prefix}_create`,
@@ -214,7 +214,7 @@ Returns: Données du/de la ${opts.entityName} créé(e) avec son ID.`,
       },
     },
     async (params: unknown) => {
-      const body = buildBody(params as Record<string, unknown>);
+      const body = await buildBody(params as Record<string, unknown>);
       const response = await apiRequest(opts.apiPath, "POST", body);
       const entity = Array.isArray(response.data) ? response.data[0] : response.data;
       return {
@@ -233,7 +233,7 @@ export function registerUpdateTool(
   server: McpServer,
   opts: CrudToolOptions,
   schema: z.ZodType,
-  buildBody: (params: Record<string, unknown>) => unknown
+  buildBody: (params: Record<string, unknown>) => unknown | Promise<unknown>
 ): void {
   server.registerTool(
     `${opts.prefix}_update`,
@@ -253,7 +253,16 @@ Returns: Données mises à jour du/de la ${opts.entityName}.`,
     async (params: unknown) => {
       const p = params as Record<string, unknown>;
       const id = p.id as string;
-      const body = buildBody(p);
+      let body: unknown;
+      try {
+        body = await buildBody(p);
+      } catch (err) {
+        // Blocking pre-write error (e.g. an unresolved org-assignment label).
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }],
+        };
+      }
       const response = await apiRequest(`${opts.apiPath}/${id}`, "PATCH", body);
       return {
         content: [
@@ -299,15 +308,17 @@ Args:
 }
 
 // Helper to build JSON:API body
-export function buildJsonApiBody(type: string, attributes: Record<string, unknown>, id?: string): unknown {
-  const body: Record<string, unknown> = {
-    data: {
-      type,
-      attributes: Object.fromEntries(Object.entries(attributes).filter(([_, v]) => v !== undefined)),
-    },
+export function buildJsonApiBody(
+  type: string,
+  attributes: Record<string, unknown>,
+  id?: string,
+  relationships?: Record<string, unknown>
+): unknown {
+  const data: Record<string, unknown> = {
+    type,
+    attributes: Object.fromEntries(Object.entries(attributes).filter(([_, v]) => v !== undefined)),
   };
-  if (id) {
-    (body.data as Record<string, unknown>).id = id;
-  }
-  return body;
+  if (id) data.id = id;
+  if (relationships && Object.keys(relationships).length > 0) data.relationships = relationships;
+  return { data };
 }

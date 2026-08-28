@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerCompanyTools } from "./companies.js";
+import * as boondClient from "../services/boond-client.js";
 
 function createMockServer() {
   return {
@@ -46,19 +47,23 @@ describe("registerCompanyTools", () => {
 
   it("should register tab tools as readOnly and non-destructive", () => {
     registerCompanyTools(server);
-    const tabCalls = vi.mocked(server.registerTool).mock.calls.filter(
-      (c) => typeof c[0] === "string" && [
-        "boond_companies_information",
-        "boond_companies_contacts",
-        "boond_companies_actions",
-        "boond_companies_opportunities",
-        "boond_companies_projects",
-        "boond_companies_orders",
-        "boond_companies_invoices",
-        "boond_companies_purchases",
-        "boond_companies_provider_invoices",
-      ].includes(c[0] as string)
-    );
+    const tabCalls = vi
+      .mocked(server.registerTool)
+      .mock.calls.filter(
+        (c) =>
+          typeof c[0] === "string" &&
+          [
+            "boond_companies_information",
+            "boond_companies_contacts",
+            "boond_companies_actions",
+            "boond_companies_opportunities",
+            "boond_companies_projects",
+            "boond_companies_orders",
+            "boond_companies_invoices",
+            "boond_companies_purchases",
+            "boond_companies_provider_invoices",
+          ].includes(c[0] as string)
+      );
 
     expect(tabCalls).toHaveLength(9);
     for (const call of tabCalls) {
@@ -66,5 +71,25 @@ describe("registerCompanyTools", () => {
       expect(metadata.annotations?.readOnlyHint).toBe(true);
       expect(metadata.annotations?.destructiveHint).toBe(false);
     }
+  });
+
+  it("update sends mainManager/agency/pole as JSON:API relationships (not attributes)", async () => {
+    const api = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: { id: "10" } } as never);
+    registerCompanyTools(server);
+    const handler = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_companies_update")![2] as (
+      p: Record<string, unknown>
+    ) => Promise<{ isError?: boolean }>;
+    await handler({ id: "10", name: "ACME", mainManager: "42", agency: "5", pole: "3" });
+    const patch = api.mock.calls.find((c) => c[1] === "PATCH");
+    expect(patch![0]).toBe("/companies/10");
+    const body = patch![2] as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> } };
+    expect(body.data.relationships).toEqual({
+      mainManager: { data: { id: "42", type: "resource" } },
+      agency: { data: { id: "5", type: "agency" } },
+      pole: { data: { id: "3", type: "pole" } },
+    });
+    // org fields must NOT leak into attributes
+    expect(body.data.attributes).not.toHaveProperty("mainManager");
+    expect(body.data.attributes).toMatchObject({ name: "ACME" });
   });
 });

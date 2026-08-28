@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ContactCreateSchema, ContactUpdateSchema, ContactSearchSchema, IdSchema } from "../schemas/index.js";
+import { resolveOrgRelationships, orgAssignmentError } from "./org-assignment.js";
 import {
   registerSearchTool,
   registerGetToolMerged,
@@ -136,9 +137,15 @@ export function registerContactTools(server: McpServer): void {
     return body;
   });
 
-  registerUpdateTool(server, OPTS, ContactUpdateSchema, (params) => {
-    const { id, ...attrs } = params;
-    return buildJsonApiBody("contact", attrs, id as string);
+  registerUpdateTool(server, OPTS, ContactUpdateSchema, async (params) => {
+    const { id, mainManager, agency, pole, ...attrs } = params;
+    const { relationships, rejected } = await resolveOrgRelationships({
+      mainManager: mainManager as string | undefined,
+      agency: agency as string | undefined,
+      pole: pole as string | undefined,
+    });
+    if (rejected.length > 0) throw orgAssignmentError(rejected);
+    return buildJsonApiBody("contact", attrs, id as string, relationships);
   });
 
   registerDeleteTool(server, OPTS);

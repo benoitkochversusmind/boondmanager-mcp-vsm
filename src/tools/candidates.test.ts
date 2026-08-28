@@ -290,6 +290,36 @@ describe("boond_candidates_update — information-tab write (v1.20.0)", () => {
     expect(applied.sort()).toEqual(["postcode", "title", "town"]);
   });
 
+  it("sends mainManager/agency/pole as JSON:API relationships on /information (not attributes)", async () => {
+    const api = echoApi();
+    const { applied } = await updateCandidateInformation({
+      id: "2123",
+      town: "Metz",
+      mainManager: "42",
+      agency: "5",
+      pole: "3",
+    });
+    const [path, method, body] = api.mock.calls[0];
+    expect(path).toBe("/candidates/2123/information");
+    expect(method).toBe("PUT");
+    const data = (body as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> } })
+      .data;
+    expect(data.relationships).toEqual({
+      mainManager: { data: { id: "42", type: "resource" } },
+      agency: { data: { id: "5", type: "agency" } },
+      pole: { data: { id: "3", type: "pole" } },
+    });
+    expect(data.attributes).toEqual({ town: "Metz" }); // org fields not leaked into attributes
+    expect(applied.sort()).toEqual(["agency", "mainManager", "pole", "town"]);
+  });
+
+  it("writes org assignment alone (no attribute) without the 'nothing to update' guard", async () => {
+    const api = echoApi();
+    await updateCandidateInformation({ id: "2123", pole: "3" });
+    const data = (api.mock.calls[0][2] as { data: { relationships: Record<string, unknown> } }).data;
+    expect(data.relationships).toEqual({ pole: { data: { id: "3", type: "pole" } } });
+  });
+
   it("falls back to POST on a 405 from PUT", async () => {
     const api = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (_path: string, method: string) => {
       if (method === "PUT") throw new Error("BoondManager API error 405: Method Not Allowed");

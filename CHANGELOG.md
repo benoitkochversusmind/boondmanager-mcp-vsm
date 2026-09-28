@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.25.0] - 2026-09-28
+
+### Ajouté
+
+- **Montant et détail des notes de frais** — `boond_expenses_get` calcule désormais le **total (TTC / TVA / HT)** en sommant les lignes de la note de frais et affiche le **détail ligne par ligne** (date, type de frais, montant, TVA, projet, activité, refacturation, frais kilométriques calculés `nombre × barème`), au lieu du simple JSON brut sans total. Motivation : l'API BoondManager ne renvoie **aucun montant agrégé** au niveau de la note de frais — le montant vit uniquement dans les tableaux de lignes (`actualExpenses`, `fixedExpenses`, `projectsExpenses`), chaque ligne portant `amountIncludingTax` + `tax` (et, pour le kilométrique, `number` × `ratePerKilometerType.amount`). Le serveur fait donc l'agrégation lui-même.
+- **Liste des notes de frais lisible** — `boond_expenses_search` et l'onglet `boond_resources_expenses_reports` rendent désormais une ligne par note de frais avec **état (libellé FR), période, statut de paiement, ressource, et total TTC quand les lignes sont présentes dans la charge utile**, au lieu d'un `[expense #id]` nu. Corrige aussi l'en-tête erroné « Total: N ressource(s) » de l'onglet ressource (→ « note(s) de frais »).
+- Deux formatters dédiés exportés (`formatExpensesReportDetail`, `formatExpensesReportsList`) et un cas `expenses-reports` dans `buildTabHandler`, sur le même patron que `formatActionsList` / `formatPositioningsList`. Tests ajoutés (détail avec total kilométrique, liste, cas vides). Suite à **700 tests**.
+
 ## [1.24.0] - 2026-08-28
 
 ### Ajouté

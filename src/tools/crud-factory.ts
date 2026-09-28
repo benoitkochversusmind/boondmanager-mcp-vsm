@@ -14,6 +14,7 @@ import type { SearchInput, IdInput, IdTabInput } from "../schemas/index.js";
 import type { JsonApiResponse } from "../types.js";
 import { formatActionsList } from "./actions.js";
 import { formatPositioningsList } from "./positionings.js";
+import { formatExpensesReportsList } from "./expenses.js";
 
 interface CrudToolOptions {
   entityName: string; // ex: "candidat", "ressource"
@@ -56,7 +57,9 @@ export function buildTabHandler(
         ? await formatActionsList(response)
         : tabName === "positionings"
           ? await formatPositioningsList(response)
-          : formatTabAuto(response, entityName);
+          : tabName === "expenses-reports"
+            ? formatExpensesReportsList(response)
+            : formatTabAuto(response, entityName);
     return { content: [{ type: "text" as const, text }] };
   };
 }

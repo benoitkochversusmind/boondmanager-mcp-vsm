@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { requestContext } from "./auth/context.js";
@@ -52,7 +52,7 @@ import { registerDocumentReadTools } from "./tools/documents-read.js";
 import { uploadDocument, fetchDocument } from "./services/boond-client.js";
 import { MAX_DOCUMENT_BYTES } from "./constants.js";
 
-const REQUIRED_ENV = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_KEYVAULT_URL"];
+const REQUIRED_ENV = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_KEYVAULT_URL", "ENTRA_CLIENT_SECRET"];
 REQUIRED_ENV.forEach((k) => {
   if (!process.env[k]) {
     console.error("Missing env var: " + k);
@@ -184,13 +184,36 @@ setInterval(() => {
   for (const [k, v] of oauthSessions) if (v.expiresAt < now) oauthSessions.delete(k);
 }, 5 * 60_000).unref();
 
+/**
+ * Allow-list for OAuth `redirect_uri`.
+ *
+ * Without this, the authorization code is delivered to whatever URL the client
+ * asks for: anyone able to get a signed-in user to open a crafted /oauth/authorize
+ * link receives that user's code and can exchange it for a session. Validated
+ * here at /oauth/authorize and re-checked at /oauth/token.
+ */
+const ALLOWED_REDIRECT_PREFIXES = [
+  "https://claude.ai/",
+  "https://claude.com/",
+  "http://localhost:",
+  "http://127.0.0.1:",
+];
+
+function isAllowedRedirectUri(uri: string): boolean {
+  return ALLOWED_REDIRECT_PREFIXES.some((prefix) => uri.startsWith(prefix));
+}
+
 function b64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 function verifyPKCE(verifier: string, challenge: string, method: string): boolean {
-  if (method === "S256") return b64url(createHash("sha256").update(verifier).digest()) === challenge;
-  if (method === "plain") return verifier === challenge;
-  return false;
+  // S256 only. Accepting "plain" lets a client send a challenge equal to its
+  // verifier, which removes the protection PKCE exists to provide — while this
+  // server's own metadata advertises code_challenge_methods_supported: ["S256"].
+  if (method !== "S256") return false;
+  const computed = Buffer.from(b64url(createHash("sha256").update(verifier).digest()));
+  const expected = Buffer.from(challenge);
+  return computed.length === expected.length && timingSafeEqual(computed, expected);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,8 +225,9 @@ async function resolveUser(
 ): Promise<{ email: string; boondJwt: string } | null> {
   const auth = (req.headers["authorization"] ?? "") as string;
   const fromHdr = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const fromQs = (req.query.token as string) ?? "";
-  const provided = fromHdr || fromQs;
+  // Header only: a token in the query string is recorded by every proxy,
+  // ingress log and analytics pipeline between the client and this process.
+  const provided = fromHdr;
 
   if (!provided) {
     res.setHeader(
@@ -394,6 +418,19 @@ app.get("/oauth/authorize", (req, res) => {
     return;
   }
 
+  // The authorization code is delivered to this URI — an unchecked value is how
+  // an attacker collects someone else's code.
+  if (!isAllowedRedirectUri(redirect_uri)) {
+    console.warn("[OAUTH] rejected authorize: redirect_uri not allow-listed:", redirect_uri);
+    res.status(400).json({ error: "invalid_request", detail: "redirect_uri is not allowed" });
+    return;
+  }
+
+  if (code_challenge_method !== "S256") {
+    res.status(400).json({ error: "invalid_request", detail: "code_challenge_method must be S256" });
+    return;
+  }
+
   // Validate client_id if provided
   const configuredClientId = process.env.OAUTH_CLIENT_ID;
   const incomingClientId = req.query.client_id as string;
@@ -526,7 +563,7 @@ app.get("/oauth/callback", async (req, res) => {
 
 // ── Token endpoint ───────────────────────────────────────────────────────────
 app.post("/oauth/token", async (req, res) => {
-  const { code, code_verifier, grant_type } = req.body as Record<string, string>;
+  const { code, code_verifier, grant_type, redirect_uri: tokenRedirectUri } = req.body as Record<string, string>;
 
   const configuredClientId = process.env.OAUTH_CLIENT_ID;
   const configuredClientSecret = process.env.OAUTH_CLIENT_SECRET;
@@ -585,6 +622,13 @@ app.post("/oauth/token", async (req, res) => {
   if (!authCode || authCode.expiresAt < Date.now()) {
     oauthCodes.delete(code);
     res.status(400).json({ error: "invalid_grant", detail: "Code expired or invalid" });
+    return;
+  }
+
+  // RFC 6749 4.1.3: when the authorize request carried a redirect_uri, the
+  // token request must present the same one.
+  if (tokenRedirectUri && tokenRedirectUri !== authCode.clientRedirectUri) {
+    res.status(400).json({ error: "invalid_grant", detail: "redirect_uri mismatch" });
     return;
   }
 

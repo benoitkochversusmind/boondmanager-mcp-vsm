@@ -121,6 +121,15 @@ export function registerOpportunityTools(server: McpServer): void {
 
   registerCreateTool(server, OPTS, OpportunityCreateSchema, (params) => {
     const { companyId, contactId, ...attrs } = params;
+    // BoondManager rejects a half-filled link (error 1029): company and
+    // contact must be provided together, or neither. Fail fast with a clear
+    // message instead of surfacing the raw 422.
+    if (Boolean(companyId) !== Boolean(contactId)) {
+      throw new Error(
+        "BoondManager exige que `companyId` et `contactId` soient fournis ensemble (ou aucun des deux). " +
+          `Reçu : ${companyId ? "companyId seul" : "contactId seul"}. Ajoutez le second identifiant, ou retirez celui fourni.`
+      );
+    }
     const body = buildJsonApiBody("opportunity", attrs);
     const relationships: Record<string, unknown> = {};
     if (companyId) relationships.company = { data: { id: companyId, type: "company" } };

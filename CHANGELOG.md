@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.25.2] - 2026-10-08
+
+### Corrigé (découvert lors de la validation live de 1.25.1)
+
+- **Création d'opportunité : le champ `note` n'était jamais enregistré** — l'opportunité BoondManager n'a pas d'attribut `note` mais **`description`** (confirmé sur une création live : la réponse expose `description`, jamais `note`). Même classe de bug que `title` en 1.25.1 : la valeur était envoyée sous un attribut inexistant et ignorée. Le champ d'entrée est renommé `note` → **`description`** sur `boond_opportunities_create` et `boond_opportunities_update`.
+- **Création d'opportunité : garde-fou `company`/`contact`** — l'API renvoie `1029 - If company or contact are defined then both have to be defined` dès qu'un seul des deux est fourni. `boond_opportunities_create` rejette désormais en amont (message clair en français) un lien à moitié renseigné, au lieu de laisser remonter le 422 brut. Descriptions des champs `companyId`/`contactId` mises à jour pour signaler la contrainte.
+
+**Validation live de 1.25.1** : création d'un besoin avec titre → `title` correctement persisté (vérifié par relecture, besoin de test supprimé). 3 tests ajoutés/mis à jour. Suite à 702 tests.
+
 ## [1.25.1] - 2026-10-08
 
 ### Corrigé

@@ -815,12 +815,25 @@ export const OpportunityCreateSchema = z
       .string()
       .min(1)
       .describe("Titre de l'opportunité (besoin). Mappé sur l'attribut API `title` (et non `name`)."),
-    companyId: z.string().optional().describe("ID de la société cliente"),
-    contactId: z.string().optional().describe("ID du contact associé"),
+    companyId: z
+      .string()
+      .optional()
+      .describe(
+        "ID de la société cliente. ⚠️ L'API BoondManager exige que `companyId` ET `contactId` soient fournis ensemble (ou aucun des deux)."
+      ),
+    contactId: z
+      .string()
+      .optional()
+      .describe(
+        "ID du contact associé. ⚠️ À fournir conjointement avec `companyId` (contrainte API : les deux ou aucun)."
+      ),
     state: z.number().int().optional().describe("État de l'opportunité"),
     startDate: z.string().optional().describe("Date de début prévue (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Date de fin prévue (YYYY-MM-DD)"),
-    note: z.string().optional().describe("Notes / description"),
+    description: z
+      .string()
+      .optional()
+      .describe("Description / notes du besoin. Mappé sur l'attribut API `description` (et non `note`)."),
   })
   .strict();
 
@@ -831,7 +844,7 @@ export const OpportunityUpdateSchema = z
     state: z.number().int().optional().describe("État"),
     startDate: z.string().optional().describe("Date de début (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Date de fin (YYYY-MM-DD)"),
-    note: z.string().optional().describe("Notes"),
+    description: z.string().optional().describe("Description / notes (attribut API `description`, et non `note`)"),
     ...orgAssignmentFields,
   })
   .strict();

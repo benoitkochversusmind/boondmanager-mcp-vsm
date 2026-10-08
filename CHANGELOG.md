@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.25.1] - 2026-10-08
+
+### Corrigé
+
+- **Création / modification d'opportunité (besoin) : le titre n'était pas enregistré** — `boond_opportunities_create` et `boond_opportunities_update` exposaient le champ sous le nom `name`, transmis tel quel dans les `attributes` JSON:API. Or l'attribut BoondManager de l'opportunité est **`title`** (et non `name`), si bien que le titre fourni était ignoré par l'API et la création échouait sur la balise `title` manquante. Le champ d'entrée est renommé en **`title`** sur les deux schémas → il est désormais envoyé sous le bon attribut. Tests mis à jour + ajout d'un test de création (create + update envoient bien `title`, jamais `name` ; le schéma rejette l'ancien champ `name`). Suite à 701 tests.
+
 ## [1.25.0] - 2026-09-28
 
 ### Ajouté

@@ -811,7 +811,10 @@ export const CompanyUpdateSchema = z
 
 export const OpportunityCreateSchema = z
   .object({
-    name: z.string().min(1).describe("Nom / titre de l'opportunité"),
+    title: z
+      .string()
+      .min(1)
+      .describe("Titre de l'opportunité (besoin). Mappé sur l'attribut API `title` (et non `name`)."),
     companyId: z.string().optional().describe("ID de la société cliente"),
     contactId: z.string().optional().describe("ID du contact associé"),
     state: z.number().int().optional().describe("État de l'opportunité"),
@@ -824,7 +827,7 @@ export const OpportunityCreateSchema = z
 export const OpportunityUpdateSchema = z
   .object({
     id: z.string().min(1).describe("ID de l'opportunité (besoin) à modifier"),
-    name: z.string().optional().describe("Nom / titre"),
+    title: z.string().optional().describe("Titre (attribut API `title`, et non `name`)"),
     state: z.number().int().optional().describe("État"),
     startDate: z.string().optional().describe("Date de début (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Date de fin (YYYY-MM-DD)"),

@@ -73,7 +73,7 @@ describe("registerOpportunityTools", () => {
       .mock.calls.find((c) => c[0] === "boond_opportunities_update")![2] as (
       p: Record<string, unknown>
     ) => Promise<unknown>;
-    await handler({ id: "77", name: "Besoin X", mainManager: "42", agency: "5", pole: "3" });
+    await handler({ id: "77", title: "Besoin X", mainManager: "42", agency: "5", pole: "3" });
     const put = api.mock.calls.find((c) => c[1] === "PUT");
     expect(put![0]).toBe("/opportunities/77/information"); // base PATCH = 405 → routed via /information
     const body = put![2] as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> } };
@@ -82,6 +82,26 @@ describe("registerOpportunityTools", () => {
       agency: { data: { id: "5", type: "agency" } },
       pole: { data: { id: "3", type: "pole" } },
     });
+    // Title flows through as the API attribute `title` (not `name`).
+    expect(body.data.attributes).toMatchObject({ title: "Besoin X" });
+    expect(body.data.attributes).not.toHaveProperty("name");
     expect(body.data.attributes).not.toHaveProperty("pole");
+  });
+
+  it("create sends the opportunity title as the API attribute `title`", async () => {
+    const api = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: { id: "88" } } as never);
+    registerOpportunityTools(server);
+    const handler = vi
+      .mocked(server.registerTool)
+      .mock.calls.find((c) => c[0] === "boond_opportunities_create")![2] as (
+      p: Record<string, unknown>
+    ) => Promise<unknown>;
+    await handler({ title: "Nouveau besoin", companyId: "12" });
+    const post = api.mock.calls.find((c) => c[1] === "POST");
+    expect(post![0]).toBe("/opportunities");
+    const body = post![2] as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> } };
+    expect(body.data.attributes).toMatchObject({ title: "Nouveau besoin" });
+    expect(body.data.attributes).not.toHaveProperty("name");
+    expect(body.data.relationships).toEqual({ company: { data: { id: "12", type: "company" } } });
   });
 });

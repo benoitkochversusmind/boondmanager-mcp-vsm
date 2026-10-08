@@ -223,14 +223,15 @@ describe("CompanyUpdateSchema", () => {
 describe("OpportunityCreateSchema", () => {
   it("should accept valid opportunity", () => {
     const result = OpportunityCreateSchema.safeParse({
-      name: "Projet Alpha",
+      title: "Projet Alpha",
       startDate: "2025-01-01",
     });
     expect(result.success).toBe(true);
   });
 
-  it("should require name", () => {
+  it("should require title (and reject the legacy `name` field)", () => {
     expect(OpportunityCreateSchema.safeParse({}).success).toBe(false);
+    expect(OpportunityCreateSchema.safeParse({ name: "Projet Alpha" }).success).toBe(false);
   });
 });
 

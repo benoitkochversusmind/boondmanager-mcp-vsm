@@ -88,20 +88,36 @@ describe("registerOpportunityTools", () => {
     expect(body.data.attributes).not.toHaveProperty("pole");
   });
 
-  it("create sends the opportunity title as the API attribute `title`", async () => {
-    const api = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: { id: "88" } } as never);
+  function createHandler() {
     registerOpportunityTools(server);
-    const handler = vi
-      .mocked(server.registerTool)
-      .mock.calls.find((c) => c[0] === "boond_opportunities_create")![2] as (
+    return vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_opportunities_create")![2] as (
       p: Record<string, unknown>
     ) => Promise<unknown>;
-    await handler({ title: "Nouveau besoin", companyId: "12" });
+  }
+
+  it("create sends title + description as the API attributes `title`/`description` (not name/note)", async () => {
+    const api = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: { id: "88" } } as never);
+    const handler = createHandler();
+    await handler({ title: "Nouveau besoin", description: "Contexte du besoin", companyId: "12", contactId: "34" });
     const post = api.mock.calls.find((c) => c[1] === "POST");
     expect(post![0]).toBe("/opportunities");
     const body = post![2] as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> } };
-    expect(body.data.attributes).toMatchObject({ title: "Nouveau besoin" });
+    expect(body.data.attributes).toMatchObject({ title: "Nouveau besoin", description: "Contexte du besoin" });
     expect(body.data.attributes).not.toHaveProperty("name");
-    expect(body.data.relationships).toEqual({ company: { data: { id: "12", type: "company" } } });
+    expect(body.data.attributes).not.toHaveProperty("note");
+    // company + contact provided together → both relationships sent.
+    expect(body.data.relationships).toEqual({
+      company: { data: { id: "12", type: "company" } },
+      contact: { data: { id: "34", type: "contact" } },
+    });
+  });
+
+  it("create rejects a half-filled company/contact link before calling the API (error 1029 guard)", async () => {
+    const api = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: { id: "88" } } as never);
+    const handler = createHandler();
+    api.mockClear(); // isolate from other tests sharing the module-level spy
+    await expect(handler({ title: "X", companyId: "12" })).rejects.toThrow(/ensemble/);
+    await expect(handler({ title: "X", contactId: "34" })).rejects.toThrow(/ensemble/);
+    expect(api).not.toHaveBeenCalled();
   });
 });

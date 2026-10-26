@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.26.0] - 2026-10-26
+
+### Ajouté
+
+- **`boond_positionings_updated` (nouvel outil composite)** — liste, en un seul appel, les positionnements dont la **date de mise à jour** tombe dans une fenêtre de dates (Europe/Paris). Enchaîne côté serveur la recherche d'opportunités (`period: "updatedPositioning"`, pagination complète) puis la récupération + le filtrage de leurs positionnements. Entrées : `startDate`/`endDate` (requis), `excludeStates` (libellés, préfixe/casse ignorés), `maxOpportunities` (défaut 200, dépassement signalé) et les filtres `perimeter*` de `boond_opportunities_search`. Sortie : en-tête de couverture (`Opportunités: X/Y traitées · Positionnements: N lus, … dans la fenêtre, … exclus, … retenus`) puis une ligne par positionnement retenu (consultant, opportunité, société, état, MàJ, BM). Parallélisation bornée (concurrence 5) ; les opportunités en échec sont listées en fin de réponse (jamais de résultat partiel silencieux). Résout le cas du skill `daily-synthesis` qui lisait des centaines de positionnements (opportunités récurrentes) pour n'en retenir qu'une poignée.
+- **Filtrage serveur sur `boond_opportunities_positionings`** — nouveaux paramètres optionnels `updatedFrom` / `updatedTo` (fenêtre de MàJ, bornes incluses), `excludeStates` (libellés d'état à exclure, préfixe/casse ignorés) et `sort` / `order`. L'en-tête devient alors explicite : `Total: X retenu(s) — Y lu(s), Z filtré(s) [date: …, états exclus: …]`. **Sans ces paramètres, le comportement est strictement inchangé** (liste complète). La récupération fusionne désormais l'`included[]` de toutes les pages (résolution du consultant correcte sur les opportunités récurrentes à plusieurs pages, auparavant perdue au-delà de la page 1).
+
+183 outils, 707 tests.
+
 ## [1.25.2] - 2026-10-08
 
 ### Corrigé (découvert lors de la validation live de 1.25.1)

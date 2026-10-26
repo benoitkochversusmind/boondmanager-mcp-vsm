@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerPositioningTools, formatPositioningsList } from "./positionings.js";
+import {
+  registerPositioningTools,
+  formatPositioningsList,
+  formatOpportunityPositionings,
+  runPositioningsUpdated,
+} from "./positionings.js";
 import * as dictionary from "../services/dictionary.js";
 import * as boondClient from "../services/boond-client.js";
 
@@ -17,9 +22,9 @@ describe("registerPositioningTools", () => {
     server = createMockServer();
   });
 
-  it("should register 5 positioning tools", () => {
+  it("should register 6 positioning tools", () => {
     registerPositioningTools(server);
-    expect(server.registerTool).toHaveBeenCalledTimes(5);
+    expect(server.registerTool).toHaveBeenCalledTimes(6);
   });
 
   it("should register all expected tool names", () => {
@@ -30,6 +35,14 @@ describe("registerPositioningTools", () => {
     expect(names).toContain("boond_positionings_create");
     expect(names).toContain("boond_positionings_update");
     expect(names).toContain("boond_positionings_delete");
+    expect(names).toContain("boond_positionings_updated");
+  });
+
+  it("registers boond_positionings_updated as read-only", () => {
+    registerPositioningTools(server);
+    const call = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_positionings_updated");
+    expect(call?.[1].annotations?.readOnlyHint).toBe(true);
+    expect(call?.[1].annotations?.destructiveHint).toBe(false);
   });
 
   it("should register search and get as readOnly", () => {
@@ -294,5 +307,167 @@ describe("boond_positionings_create / _update", () => {
     expect(data.id).toBe("14948");
     expect(data.attributes["informationComments"]).toBe("MAJ");
     expect(data.attributes["state"]).toBe(1);
+  });
+});
+
+// ---- Évolution 1 : filtrage serveur de l'onglet positionnements -------------
+
+describe("formatOpportunityPositionings (filtrage date + états)", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  function pos(id: string, attrs: Record<string, unknown>, rels: Record<string, unknown> = {}) {
+    return { id, type: "positioning", attributes: attrs, relationships: rels };
+  }
+
+  it("filters by update window + excludeStates and emits the detailed count header", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({
+      byId: new Map([
+        [0, "01 - Suggéré"],
+        [3, "03 - No Go Interne"],
+      ]),
+      byLabel: new Map(),
+    } as never);
+
+    const response = {
+      data: [
+        pos(
+          "1",
+          { updateDate: "2026-10-23T10:25:00+0200", state: 0 },
+          { dependsOn: { data: { id: "10", type: "candidate" } } }
+        ),
+        pos(
+          "2",
+          { updateDate: "2026-10-22T09:00:00+0200", state: 0 }, // hors fenêtre (date)
+          { dependsOn: { data: { id: "11", type: "candidate" } } }
+        ),
+        pos(
+          "3",
+          { updateDate: "2026-10-23T18:00:00+0200", state: 3 }, // exclu par état
+          { dependsOn: { data: { id: "12", type: "candidate" } } }
+        ),
+      ],
+      included: [{ id: "10", type: "candidate", attributes: { firstName: "Ada", lastName: "L" } }],
+      meta: { totals: { rows: 3 } },
+    };
+
+    const text = await formatOpportunityPositionings(response as never, {
+      updatedFrom: "2026-10-23",
+      updatedTo: "2026-10-23",
+      excludeStates: ["No Go Interne"], // préfixe/casse ignorés
+    });
+
+    expect(text).toContain("Total: 1 positionnement(s) retenu(s) — 3 lu(s), 2 filtré(s) [date: 1, états exclus: 1]");
+    expect(text).toContain("[positioning #1]");
+    expect(text).not.toContain("[positioning #2]");
+    expect(text).not.toContain("[positioning #3]");
+  });
+
+  it("keeps everything (date: 0, états exclus: 0) when the window covers all and no state is excluded", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({
+      byId: new Map([[0, "01 - Suggéré"]]),
+      byLabel: new Map(),
+    } as never);
+    const response = {
+      data: [pos("1", { updateDate: "2026-10-23T10:25:00+0200", state: 0 }, {})],
+      meta: { totals: { rows: 1 } },
+    };
+    const text = await formatOpportunityPositionings(response as never, {
+      updatedFrom: "2026-10-23",
+      updatedTo: "2026-10-23",
+    });
+    expect(text).toContain("Total: 1 positionnement(s) retenu(s) — 1 lu(s), 0 filtré(s) [date: 0, états exclus: 0]");
+  });
+});
+
+// ---- Évolution 2 : boond_positionings_updated -------------------------------
+
+describe("runPositioningsUpdated", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  function pos(id: string, attrs: Record<string, unknown>, rels: Record<string, unknown> = {}) {
+    return { id, type: "positioning", attributes: attrs, relationships: rels };
+  }
+
+  it("chains opp search + positionings, filters on the window, resolves consultant/opp/company/BM", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({
+      byId: new Map([[0, "01 - Suggéré"]]),
+      byLabel: new Map(),
+    } as never);
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(
+      async (path: string, _m?: unknown, _b?: unknown, query?: Record<string, unknown>) => {
+        const page = Number(query?.["page"] ?? 1);
+        if (path === "/opportunities") {
+          if (page > 1) return { data: [] } as never;
+          return {
+            data: [
+              {
+                id: "4690",
+                type: "opportunity",
+                attributes: { title: "Dev PHP" },
+                relationships: {
+                  company: { data: { id: "500", type: "company" } },
+                  mainManager: { data: { id: "9", type: "resource" } },
+                },
+              },
+            ],
+            included: [
+              { id: "500", type: "company", attributes: { name: "ACME" } },
+              { id: "9", type: "resource", attributes: { firstName: "Max", lastName: "BM" } },
+            ],
+            meta: { totals: { rows: 1 } },
+          } as never;
+        }
+        if (path === "/opportunities/4690/positionings") {
+          if (page > 1) return { data: [] } as never;
+          return {
+            data: [
+              pos(
+                "16788",
+                { updateDate: "2026-10-23T10:25:00+0200", state: 0 },
+                {
+                  dependsOn: { data: { id: "43406", type: "candidate" } },
+                  opportunity: { data: { id: "4690", type: "opportunity" } },
+                }
+              ),
+              pos(
+                "16703",
+                { updateDate: "2026-10-14T14:33:00+0200", state: 0 }, // hors fenêtre
+                { dependsOn: { data: { id: "1", type: "candidate" } } }
+              ),
+            ],
+            included: [{ id: "43406", type: "candidate", attributes: { firstName: "Alexandre", lastName: "Buniet" } }],
+            meta: { totals: { rows: 2 } },
+          } as never;
+        }
+        return { data: [] } as never;
+      }
+    );
+
+    const text = await runPositioningsUpdated({
+      startDate: "2026-10-23",
+      endDate: "2026-10-23",
+      maxOpportunities: 200,
+    } as never);
+
+    expect(text).toContain(
+      "Opportunités: 1/1 traitées · Positionnements: 2 lus, 1 dans la fenêtre, 0 exclus, 1 retenus"
+    );
+    expect(text).toContain("[positioning #16788]");
+    expect(text).toContain("Alexandre Buniet (candidat)");
+    expect(text).toContain("opportunité #4690 Dev PHP");
+    expect(text).toContain("ACME");
+    expect(text).toContain("BM: Max BM");
+    expect(text).not.toContain("[positioning #16703]");
+  });
+
+  it("returns an explicit message (no error) when the window has no opportunity", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: [] } as never);
+    const text = await runPositioningsUpdated({
+      startDate: "2026-10-26",
+      endDate: "2026-10-26",
+      maxOpportunities: 200,
+    } as never);
+    expect(text).toContain("0/0 traitées");
+    expect(text.toLowerCase()).toContain("aucune opportunité");
   });
 });

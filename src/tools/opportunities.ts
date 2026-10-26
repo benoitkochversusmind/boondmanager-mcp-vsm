@@ -3,6 +3,7 @@ import {
   OpportunityCreateSchema,
   OpportunityUpdateSchema,
   OpportunitySearchSchema,
+  OpportunityPositioningsSchema,
   IdSchema,
 } from "../schemas/index.js";
 import {
@@ -15,6 +16,7 @@ import {
   buildTabHandler,
 } from "./crud-factory.js";
 import { resolveOrgRelationships, orgAssignmentError } from "./org-assignment.js";
+import { buildOpportunityPositioningsHandler } from "./positionings.js";
 
 const OPTS = {
   entityName: "opportunité",
@@ -64,12 +66,17 @@ Returns: Liste des actions liées à l'opportunité.`,
     name: "positionings",
     tab: "positionings",
     title: "Positionnements d'une opportunité",
-    description: `Récupère les positionnements (candidats/ressources proposés) sur une opportunité.
+    description: `Récupère les positionnements (candidats/ressources proposés) sur une opportunité, avec filtrage serveur optionnel.
 
 Args:
   - id (string): ID de l'opportunité
+  - updatedFrom / updatedTo (YYYY-MM-DD, optionnels): ne garder que les positionnements dont la date de MàJ tombe dans la fenêtre (bornes incluses, Europe/Paris).
+  - excludeStates (string[], optionnel): libellés d'état à exclure (préfixe numérique et casse ignorés, ex: ["Candidature annonce", "No Go Interne"]).
+  - sort ("updateDate" | "creationDate", optionnel) + order ("asc" | "desc"): tri des lignes.
 
-Returns: Liste des positionnements de l'opportunité.`,
+Sans ces paramètres, renvoie la liste complète (comportement inchangé). Avec filtre, l'en-tête précise « X retenu(s) — Y lu(s), Z filtré(s) [date, états exclus] ».
+
+Returns: Liste (filtrée) des positionnements de l'opportunité.`,
   },
   {
     name: "projects",
@@ -161,6 +168,21 @@ export function registerOpportunityTools(server: McpServer): void {
 
   // Register one tool per opportunity tab (paginated + auto list/detail formatter — cf. 1.10.3).
   for (const tab of OPPORTUNITY_TABS) {
+    // The positionings tab accepts server-side date/state filters (cf. 1.26.0),
+    // so it uses a dedicated schema + handler instead of the generic tab handler.
+    if (tab.name === "positionings") {
+      server.registerTool(
+        `boond_opportunities_positionings`,
+        {
+          title: tab.title,
+          description: tab.description,
+          inputSchema: OpportunityPositioningsSchema,
+          annotations: TAB_TOOL_ANNOTATIONS,
+        },
+        buildOpportunityPositioningsHandler()
+      );
+      continue;
+    }
     server.registerTool(
       `boond_opportunities_${tab.name}`,
       {

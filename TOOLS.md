@@ -3,7 +3,7 @@
 > Auto-generated from the server registrations. Do not edit by hand.
 > Regenerate with `npm run docs:tools` (CI fails if this file is stale).
 
-**182 tools** across **38 domains** · **12 prompts** · **21 resources**.
+**183 tools** across **38 domains** · **12 prompts** · **21 resources**.
 
 Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destructiveHint), `idempotent` (idempotentHint), `open-world` (openWorldHint, e.g. paginated keyword search).
 
@@ -235,7 +235,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_poles_get` | Détails d'un pôle | read · idempotent |
 | `boond_poles_search` | Rechercher des pôles | read · idempotent · open-world |
 
-### positionings (5)
+### positionings (6)
 
 | Tool | Title | Hints |
 |---|---|---|
@@ -244,6 +244,7 @@ Hint legend: `read` (readOnlyHint), `write` (creates/updates), `delete` (destruc
 | `boond_positionings_get` | Détails d'un positionnement | read · idempotent |
 | `boond_positionings_search` | Rechercher des positionnements | read · idempotent · open-world |
 | `boond_positionings_update` | Modifier un positionnement | write · idempotent |
+| `boond_positionings_updated` | Positionnements mis à jour sur une fenêtre de dates | read · idempotent · open-world |
 
 ### products (5)
 

@@ -1505,6 +1505,82 @@ export const PositioningSearchSchema = z
   })
   .strict();
 
+// Onglet positionnements d'une opportunité, avec filtrage serveur optionnel par
+// date de mise à jour et par état. Sans aucun de ces paramètres, le comportement
+// est strictement identique à l'onglet historique (liste complète).
+const excludeStatesField = z
+  .array(z.string())
+  .optional()
+  .describe(
+    "Libellés d'état à exclure. Le rapprochement ignore le préfixe numérique et la casse " +
+      '(ex: ["Candidature annonce", "No Go Interne"] exclut « 00 - Candidature annonce » et « 03 - No Go Interne »).'
+  );
+
+export const OpportunityPositioningsSchema = z
+  .object({
+    id: z.string().min(1).describe("ID de l'opportunité"),
+    updatedFrom: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe("Ne garder que les positionnements dont la date de MàJ est ≥ cette date (YYYY-MM-DD, Europe/Paris)."),
+    updatedTo: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .describe(
+        "Ne garder que les positionnements dont la date de MàJ est ≤ cette date (YYYY-MM-DD, bornes incluses)."
+      ),
+    excludeStates: excludeStatesField,
+    sort: z
+      .enum(["updateDate", "creationDate"])
+      .optional()
+      .describe("Tri des lignes renvoyées (par date de MàJ ou de création). Défaut: ordre de l'API."),
+    order: z
+      .enum(["asc", "desc"])
+      .optional()
+      .describe("Ordre de tri (asc/desc). Défaut: desc quand `sort` est fourni."),
+  })
+  .strict();
+export type OpportunityPositioningsInput = z.infer<typeof OpportunityPositioningsSchema>;
+
+// Outil composite : positionnements mis à jour sur une fenêtre de dates, en un
+// seul appel (opportunités via period=updatedPositioning, puis leurs
+// positionnements, filtrés et résolus côté serveur).
+export const PositioningsUpdatedSchema = z
+  .object({
+    startDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .describe("Début de la fenêtre de mise à jour (YYYY-MM-DD, Europe/Paris, borne incluse)."),
+    endDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .describe("Fin de la fenêtre de mise à jour (YYYY-MM-DD, borne incluse)."),
+    excludeStates: excludeStatesField,
+    maxOpportunities: z
+      .number()
+      .int()
+      .min(1)
+      .max(1000)
+      .default(200)
+      .describe(
+        "Plafond d'opportunités traitées (défaut 200). Un dépassement est signalé explicitement dans la réponse."
+      ),
+    perimeterManagers: perimeterManagersField,
+    perimeterManagersType: z
+      .enum(["main", "hr"])
+      .optional()
+      .describe("Type de responsable visé par `perimeterManagers` (main/hr)."),
+    perimeterAgencies: perimeterAgenciesField,
+    perimeterPoles: perimeterPolesField,
+    perimeterBusinessUnits: perimeterBusinessUnitsField,
+    perimeterDynamic: perimeterDynamicField,
+    narrowPerimeter: narrowPerimeterField,
+  })
+  .strict();
+export type PositioningsUpdatedInput = z.infer<typeof PositioningsUpdatedSchema>;
+
 // ---- Payment schemas ----
 
 export const PaymentSearchSchema = z

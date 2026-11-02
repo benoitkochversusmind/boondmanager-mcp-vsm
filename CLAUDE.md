@@ -480,6 +480,20 @@ auth + per-user JWT injection. VSM-only ops considerations :
   the scale-down during pulls and removes cold-start latency on OAuth
   sessions (bonus UX). Cost is a few €/month for one continuously-running
   pod.
+- **`maxReplicas: 1` is ALSO required** (`az containerapp update --min-replicas 1 --max-replicas 1`).
+  The OAuth flow keeps its state **in memory, per replica** — `pendingFlows`
+  (the `state` param), `oauthCodes`, and `oauthSessions` are plain `Map`s in
+  `src/index.ts`, with `stickySessions: none` on the ingress. If the app ever
+  scales to ≥2 replicas, `/oauth/authorize` (replica A) and `/oauth/callback`
+  (replica B) diverge and the login fails intermittently with
+  **`Invalid or expired state. Please retry.`** (observed 2026-08-06 with the
+  default `maxReplicas: 10` under load → 2 replicas). Diagnose with
+  `az containerapp revision list --query "[?properties.active].properties.replicas"`.
+  So pin **both** min and max to 1: min for the KEDA scale-to-zero race above,
+  max for the in-memory OAuth state. Do NOT raise `maxReplicas` until the OAuth
+  state is made stateless (self-contained signed `state`) or moved to a shared
+  store (Redis). Note: every redeploy still wipes `oauthSessions`, so each user
+  re-does an SSO once after a deploy — expected, not a bug.
 - **Single-revision mode** — traffic split via `ingress traffic set`
   isn't available. Rollback is done via `az containerapp revision
   activate --revision <previous>`. Always keep the previous healthy

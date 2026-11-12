@@ -308,6 +308,68 @@ describe("boond_positionings_create / _update", () => {
     expect(data.attributes["informationComments"]).toBe("MAJ");
     expect(data.attributes["state"]).toBe(1);
   });
+
+  it("create: forwards pricing attributes and surfaces price/cost/margin", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({ byId: new Map(), byLabel: new Map() } as never);
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({
+      data: {
+        id: "1",
+        type: "positioning",
+        attributes: { averageDailyPriceExcludingTax: 780, averageDailyCost: 600, marginSimulatedExcludingTax: 180 },
+      },
+    } as never);
+    const handler = getHandler("boond_positionings_create");
+
+    const res = await handler({
+      candidateId: "43885",
+      opportunityId: "4685",
+      averageDailyPriceExcludingTax: 780,
+      averageDailyCost: 600,
+    });
+
+    const data = (apiSpy.mock.calls[0][2] as { data: { attributes: Record<string, unknown> } }).data;
+    expect(data.attributes["averageDailyPriceExcludingTax"]).toBe(780);
+    expect(data.attributes["averageDailyCost"]).toBe(600);
+    expect(res.content[0].text).toContain("💶 Prix TJM HT: 780");
+    expect(res.content[0].text).toContain("Marge simulée HT: 180");
+  });
+
+  it("update: forwards pricing, re-reads the positioning, and shows the recomputed margin", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({ byId: new Map(), byLabel: new Map() } as never);
+    const apiSpy = vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path: string, method?: string) => {
+      if (method === "PUT") {
+        return {
+          data: { id: "16807", type: "positioning", attributes: { averageDailyPriceExcludingTax: 780 } },
+        } as never;
+      }
+      // re-GET after the write → authoritative recomputed values
+      return {
+        data: {
+          id: "16807",
+          type: "positioning",
+          attributes: { averageDailyPriceExcludingTax: 780, averageDailyCost: 600, marginSimulatedExcludingTax: 180 },
+        },
+      } as never;
+    });
+    const handler = getHandler("boond_positionings_update");
+
+    const res = await handler({ id: "16807", averageDailyPriceExcludingTax: 780, averageDailyCost: 600 });
+
+    expect(apiSpy.mock.calls.some((c) => c[1] === "PUT" && c[0] === "/positionings/16807")).toBe(true);
+    expect(apiSpy.mock.calls.some((c) => c[1] === "GET" && c[0] === "/positionings/16807")).toBe(true);
+    expect(res.content[0].text).toContain("💶 Prix TJM HT: 780");
+    expect(res.content[0].text).toContain("Marge simulée HT: 180");
+  });
+
+  it("update: without pricing fields, does NOT issue an extra GET", async () => {
+    vi.spyOn(dictionary, "getStateMap").mockResolvedValue({ byId: new Map(), byLabel: new Map() } as never);
+    const apiSpy = vi
+      .spyOn(boondClient, "apiRequest")
+      .mockResolvedValue({ data: { id: "14948", type: "positioning", attributes: {} } } as never);
+    const handler = getHandler("boond_positionings_update");
+    await handler({ id: "14948", state: 1 });
+    expect(apiSpy.mock.calls.filter((c) => c[1] === "GET").length).toBe(0);
+  });
 });
 
 // ---- Évolution 1 : filtrage serveur de l'onglet positionnements -------------

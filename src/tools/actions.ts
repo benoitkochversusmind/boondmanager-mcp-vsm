@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ActionSearchSchema, ActionCreateSchema, IdSchema } from "../schemas/index.js";
+import { ActionSearchSchema, ActionCreateSchema, ActionUpdateSchema, IdSchema } from "../schemas/index.js";
+import type { ActionUpdateInput } from "../schemas/index.js";
 import { apiRequest, buildSearchQuery, formatDetailResponse } from "../services/boond-client.js";
 import { CHARACTER_LIMIT } from "../constants.js";
 import { getDictionary, resolveDictionaryPath } from "../services/dictionary.js";
@@ -468,7 +469,41 @@ interface ActionCreateInput {
   companyId?: string;
   opportunityId?: string;
   projectId?: string;
+  positioningId?: string;
   mainManagerId?: string;
+}
+
+// Certains types d'action exigent une relation `positioning` ; l'API renvoie
+// alors « 1002 - Wrong or missing attribute (parameter: /data/relationships/positioning) ».
+function isMissingPositioningError(message: string): boolean {
+  return /1002/.test(message) && /\/data\/relationships\/positioning/.test(message);
+}
+
+/**
+ * Construit un indice listant les positionnements disponibles pour l'entité liée
+ * (contact ou ressource), afin d'aider l'appelant à fournir `positioningId`.
+ * Best-effort : en cas d'échec, renvoie une chaîne vide.
+ */
+async function suggestPositionings(dependsOn: { id: string; type: string }): Promise<string> {
+  const prefixByType: Record<string, string> = { contact: "CCON", resource: "COMP", candidate: "CAND" };
+  const prefix = prefixByType[dependsOn.type];
+  if (!prefix) return "";
+  try {
+    const resp = await apiRequest("/positionings", "GET", undefined, {
+      keywords: `${prefix}${dependsOn.id}`,
+      maxResults: 20,
+      include: "candidate,resource,opportunity,project",
+    });
+    const rows = Array.isArray(resp.data) ? resp.data : resp.data ? [resp.data] : [];
+    if (rows.length === 0) return `Aucun positionnement trouvé pour ${dependsOn.type} #${dependsOn.id}.`;
+    const lines = rows.map((p) => {
+      const a = (p.attributes ?? {}) as Record<string, unknown>;
+      return `  - positioning #${p.id} (état ${a["state"] ?? "?"})`;
+    });
+    return `Positionnements disponibles pour ${dependsOn.type} #${dependsOn.id} :\n${lines.join("\n")}`;
+  } catch {
+    return "";
+  }
 }
 
 export async function handleActionCreate(params: ActionCreateInput): Promise<string> {
@@ -526,22 +561,77 @@ export async function handleActionCreate(params: ActionCreateInput): Promise<str
   if (endDate) attributes.endDate = endDate;
 
   // ---- JSON:API body ----
-  const body = {
-    data: {
-      type: "action",
-      attributes,
-      relationships: {
-        dependsOn: { data: { id: dependsOn.id, type: dependsOn.type } },
-        mainManager: { data: { id: mainManagerId, type: "resource" } },
-      },
-    },
+  const relationships: Record<string, unknown> = {
+    dependsOn: { data: { id: dependsOn.id, type: dependsOn.type } },
+    mainManager: { data: { id: mainManagerId, type: "resource" } },
   };
+  // Relation `positioning` (en plus de `dependsOn`) — exigée par certains types
+  // d'action (ex: types 8 et 10).
+  if (params.positioningId) {
+    relationships.positioning = { data: { id: params.positioningId, type: "positioning" } };
+  }
+
+  const body = { data: { type: "action", attributes, relationships } };
 
   logger.debug({ body }, "POST /actions payload");
 
-  const response = await apiRequest("/actions", "POST", body);
+  let response: JsonApiResponse;
+  try {
+    response = await apiRequest("/actions", "POST", body);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!params.positioningId && isMissingPositioningError(msg)) {
+      const hint = await suggestPositionings(dependsOn);
+      throw new Error(
+        `Ce type d'action (typeOf ${typeOfNum}) exige un positionnement : fournissez \`positioningId\`.` +
+          (hint ? `\n${hint}` : ""),
+        { cause: err }
+      );
+    }
+    throw err;
+  }
   const entity = Array.isArray(response.data) ? response.data[0] : response.data;
-  return `✅ Action créée avec succès.\nID : ${entity?.id}\nType : ${typeOfNum}\nDépend de : ${dependsOn.type} #${dependsOn.id}\nResponsable : resource #${mainManagerId}\n\n${formatDetailResponse(response)}`;
+  const positioningLine = params.positioningId ? `\nPositionnement : #${params.positioningId}` : "";
+  return `✅ Action créée avec succès.\nID : ${entity?.id}\nType : ${typeOfNum}\nDépend de : ${dependsOn.type} #${dependsOn.id}${positioningLine}\nResponsable : resource #${mainManagerId}\n\n${formatDetailResponse(response)}`;
+}
+
+export async function handleActionUpdate(params: ActionUpdateInput): Promise<string> {
+  const { id } = params;
+
+  const attributes: Record<string, unknown> = {};
+  if (params.typeOf !== undefined) {
+    const n = typeof params.typeOf === "number" ? params.typeOf : Number(params.typeOf);
+    if (!Number.isFinite(n) || n < 0) {
+      throw new Error(
+        `Paramètre invalide : 'typeOf' doit être un ID numérique. Reçu : ${JSON.stringify(params.typeOf)}.`
+      );
+    }
+    attributes.typeOf = n;
+  }
+  if (params.title !== undefined) attributes.title = params.title;
+  if (params.text !== undefined) attributes.text = params.text;
+  const startDate = normaliseActionDate(params.startDate);
+  const endDate = normaliseActionDate(params.endDate);
+  if (startDate) attributes.startDate = startDate;
+  if (endDate) attributes.endDate = endDate;
+
+  const relationships: Record<string, unknown> = {};
+  if (params.positioningId) relationships.positioning = { data: { id: params.positioningId, type: "positioning" } };
+  if (params.mainManagerId) relationships.mainManager = { data: { id: params.mainManagerId, type: "resource" } };
+
+  if (Object.keys(attributes).length === 0 && Object.keys(relationships).length === 0) {
+    throw new Error(
+      "Rien à modifier : fournissez au moins un champ (title, text, startDate, endDate, positioningId, …)."
+    );
+  }
+
+  const data: Record<string, unknown> = { type: "action", id, attributes };
+  if (Object.keys(relationships).length > 0) data.relationships = relationships;
+  const body = { data };
+
+  logger.debug({ body }, "PUT /actions payload");
+  const response = await apiRequest(`/actions/${id}`, "PUT", body);
+  return `✅ Action #${id} mise à jour.\n\n${formatDetailResponse(response)}`;
 }
 
 export function registerActionTools(server: McpServer): void {
@@ -679,7 +769,9 @@ Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type |
 
 **Responsable** : \`mainManagerId\` (ID de la ressource collaborateur). Si omis, le tool résout automatiquement la ressource de l'utilisateur courant via \`/application/current-user\` (parsing du \`thumbnail\` \`resource_<id>_*\`).
 
-**Dates** : \`startDate\` accepte \`YYYY-MM-DD\` (normalisé à minuit Europe/Paris) ou ISO 8601 complet.
+**Positionnement** : \`positioningId\` ajoute la relation \`positioning\` (en plus de \`dependsOn\`). Certains types l'EXIGENT — ex. type 10 « Réunion de qualification technique (Klif) », type 8 « Présentation Client » ; sans lui, l'API renvoie 422 (1002) et le tool renvoie alors un message listant les positionnements disponibles.
+
+**Dates** : \`startDate\` et \`endDate\` acceptent \`YYYY-MM-DD\` (normalisé à minuit Europe/Paris) ou ISO 8601 complet (ex. un RDV de 10h à 13h → fournir les deux). Sans \`endDate\`, BoondManager fixe la fin à début + 1h.
 
 **Type d'action** : pour la liste exhaustive des IDs, voir \`boond_application_dictionary\` avec \`setting.action.<entity>\` (scopé par contact/candidate/resource/opportunity/project/order/invoice).
 
@@ -695,6 +787,32 @@ Erreurs claires : si aucune entité liée fournie OU si la ressource utilisateur
     async (params) => {
       const created = await handleActionCreate(params);
       return { content: [{ type: "text" as const, text: created }] };
+    }
+  );
+
+  // Update action
+  server.registerTool(
+    "boond_actions_update",
+    {
+      title: "Modifier une action",
+      description: `Met à jour une action existante dans BoondManager (PUT /actions/{id}). Seuls les champs fournis sont modifiés.
+
+Args : \`id\` (requis) + au moins un champ parmi \`typeOf\`, \`title\`, \`text\`, \`startDate\`, \`endDate\`, \`positioningId\`, \`mainManagerId\`.
+
+**Rattacher un positionnement** : \`positioningId\` ajoute la relation \`positioning\` (utile pour corriger une action dont le type l'exige — ex. types 8 et 10).
+
+**Dates** : \`startDate\`/\`endDate\` acceptent \`YYYY-MM-DD\` (minuit Europe/Paris) ou ISO 8601 complet (ex. un RDV 10h→13h).`,
+      inputSchema: ActionUpdateSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (params) => {
+      const updated = await handleActionUpdate(params as ActionUpdateInput);
+      return { content: [{ type: "text" as const, text: updated }] };
     }
   );
 

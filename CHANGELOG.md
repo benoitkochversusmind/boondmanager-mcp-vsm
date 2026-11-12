@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.27.0] - 2026-11-12
+
+### Ajouté
+
+- **Rattacher une action à un positionnement** — `boond_actions_create` et le nouvel outil `boond_actions_update` acceptent `positioningId`, envoyé en relation JSON:API `positioning` (en plus de `dependsOn`). Certains types d'action l'exigent (ex. type 10 « Réunion de qualification technique (Klif) », type 8 « Présentation Client ») : sans lui l'API renvoie `422 (1002, /data/relationships/positioning)`. Dans ce cas, le serveur renvoie un message explicite **listant les positionnements disponibles** pour le contact/la ressource lié(e).
+- **`boond_actions_update` (nouvel outil)** — met à jour une action existante (PUT /actions/{id}) : `typeOf`, `title`, `text`, `startDate`, `endDate`, `positioningId`, `mainManagerId`. Seuls les champs fournis sont transmis ; refus clair si aucun champ.
+- **Prix de vente et coût d'un positionnement** — `boond_positionings_create` et `boond_positionings_update` acceptent `averageDailyPriceExcludingTax` (TJM vente HT), `averageDailyCost` (coût/j), `numberOfDaysInvoicedOrQuantity`, `numberOfDaysFree` (noms d'attributs API exacts). Le coût n'est **écrasé que s'il est fourni explicitement** (sinon le coût calculé depuis le contrat de travail est conservé). Après écriture, le positionnement est relu et le **prix / coût / CA / marge simulés** sont renvoyés.
+
+### Confirmé
+
+- **`endDate` des actions** était déjà géré (`boond_actions_create`) ; désormais aussi sur `boond_actions_update` — un RDV 10h→13h s'enregistre correctement (sans `endDate`, Boond fixe la fin à début + 1h).
+
+184 outils, 715 tests.
+
 ## [1.26.0] - 2026-10-26
 
 ### Ajouté

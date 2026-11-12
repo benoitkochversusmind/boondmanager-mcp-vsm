@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.27.1] - 2026-11-12
+
+### Corrigé (documentation, suite à la recette live de 1.27.0)
+
+- **Actions `title` / `endDate` : descriptions corrigées** — la recette live a confirmé que l'API BoondManager (ce tenant) **ignore un `endDate` personnalisé** (la fin est forcée à début + 1h, vérifié sur les types 3 et 29, y compris sur un RDV synchronisé depuis Outlook) et **recalcule le `title`** pour de nombreux types (« Contact - Société », nom de la ressource). Les descriptions de `boond_actions_create` / `boond_actions_update` (schémas + outils) l'indiquent désormais explicitement et recommandent de mettre l'information en 1ʳᵉ ligne de `text`. Les champs restent exposés (transmis au cas où l'API les honorerait). Aucun changement de comportement.
+
 ## [1.27.0] - 2026-11-12
 
 ### Ajouté

@@ -771,7 +771,9 @@ Returns: Liste des actions. Chaque ligne contient \`[action #id] | date | type |
 
 **Positionnement** : \`positioningId\` ajoute la relation \`positioning\` (en plus de \`dependsOn\`). Certains types l'EXIGENT — ex. type 10 « Réunion de qualification technique (Klif) », type 8 « Présentation Client » ; sans lui, l'API renvoie 422 (1002) et le tool renvoie alors un message listant les positionnements disponibles.
 
-**Dates** : \`startDate\` et \`endDate\` acceptent \`YYYY-MM-DD\` (normalisé à minuit Europe/Paris) ou ISO 8601 complet (ex. un RDV de 10h à 13h → fournir les deux). Sans \`endDate\`, BoondManager fixe la fin à début + 1h.
+**Dates** : \`startDate\` accepte \`YYYY-MM-DD\` (minuit Europe/Paris) ou ISO 8601 complet. ⚠️ \`endDate\` est **actuellement ignoré par l'API** (la fin est forcée à début + 1h, quel que soit le type — vérifié en prod) ; il est transmis au cas où l'API l'honorerait plus tard.
+
+**Titre** : \`title\` est souvent **recalculé** par BoondManager (« Contact - Société », nom de la ressource…) et la valeur fournie est ignorée. Mettez plutôt le titre en 1ʳᵉ ligne de \`text\`.
 
 **Type d'action** : pour la liste exhaustive des IDs, voir \`boond_application_dictionary\` avec \`setting.action.<entity>\` (scopé par contact/candidate/resource/opportunity/project/order/invoice).
 
@@ -801,7 +803,7 @@ Args : \`id\` (requis) + au moins un champ parmi \`typeOf\`, \`title\`, \`text\`
 
 **Rattacher un positionnement** : \`positioningId\` ajoute la relation \`positioning\` (utile pour corriger une action dont le type l'exige — ex. types 8 et 10).
 
-**Dates** : \`startDate\`/\`endDate\` acceptent \`YYYY-MM-DD\` (minuit Europe/Paris) ou ISO 8601 complet (ex. un RDV 10h→13h).`,
+**Dates** : \`startDate\` en \`YYYY-MM-DD\` (minuit Europe/Paris) ou ISO 8601. ⚠️ \`endDate\` est **actuellement ignoré par l'API** (fin forcée à début + 1h — vérifié en prod). \`title\` est souvent recalculé par Boond → privilégier \`text\`.`,
       inputSchema: ActionUpdateSchema,
       annotations: {
         readOnlyHint: false,

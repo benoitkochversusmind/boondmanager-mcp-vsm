@@ -944,7 +944,12 @@ export const ActionCreateSchema = z
         "ID numérique du type d'action (ex: 3=Rappel / To do, 17=Reprise de contact, 41=Appel, 42=Email, 61=Prospection Appel). " +
           "Lister les IDs via `boond_application_dictionary` avec `setting.action.<entity>` (contact, candidate, resource, opportunity, project, order, invoice)."
       ),
-    title: z.string().optional().describe("Titre de l'action (attribut `title` BoondManager)."),
+    title: z
+      .string()
+      .optional()
+      .describe(
+        "Titre de l'action. ⚠️ Pour de nombreux types, BoondManager RECALCULE le titre (« Contact - Société », nom de la ressource…) et IGNORE la valeur fournie (vérifié en prod). Mettez plutôt l'info utile en 1ʳᵉ ligne de `text`."
+      ),
     text: z.string().optional().describe("Contenu / description HTML de l'action (attribut `text` BoondManager)."),
     // Back-compat aliases — the previous schema accepted these names, but the
     // BoondManager attributes are actually `title` and `text`. We forward
@@ -958,7 +963,12 @@ export const ActionCreateSchema = z
       .describe(
         "Date / horaire de début. Accepté : `YYYY-MM-DD` (normalisé à minuit Europe/Paris) ou ISO 8601 complet."
       ),
-    endDate: z.string().optional().describe("Date / horaire de fin (même formats que `startDate`)."),
+    endDate: z
+      .string()
+      .optional()
+      .describe(
+        "Date / horaire de fin (mêmes formats que `startDate`). ⚠️ Actuellement IGNORÉ par l'API BoondManager : la fin est forcée à début + 1h quel que soit le type (vérifié en prod sur types 3 et 29). Transmis au cas où l'API l'honorerait à l'avenir."
+      ),
     // ---- Linked-entity relationships ----
     // BoondManager exige UNE relation `dependsOn` polymorphe. On la construit
     // depuis le premier de ces IDs renseigné (priorité : contact > candidate >
@@ -998,13 +1008,23 @@ export const ActionUpdateSchema = z
       .union([z.number().int(), z.string().regex(/^\d+$/)])
       .optional()
       .describe("Nouveau type d'action (ID numérique du dictionnaire setting.action.<entity>)."),
-    title: z.string().optional().describe("Titre de l'action (attribut `title` BoondManager)."),
+    title: z
+      .string()
+      .optional()
+      .describe(
+        "Titre de l'action. ⚠️ Souvent RECALCULÉ par BoondManager (titre calculé) et donc ignoré — mettre l'info en 1ʳᵉ ligne de `text`."
+      ),
     text: z.string().optional().describe("Contenu / description HTML de l'action (attribut `text`)."),
     startDate: z
       .string()
       .optional()
       .describe("Date / horaire de début. `YYYY-MM-DD` (minuit Europe/Paris) ou ISO 8601 complet."),
-    endDate: z.string().optional().describe("Date / horaire de fin (même formats que `startDate`)."),
+    endDate: z
+      .string()
+      .optional()
+      .describe(
+        "Date / horaire de fin. ⚠️ Actuellement IGNORÉ par l'API (fin forcée à début + 1h, vérifié en prod). Transmis au cas où."
+      ),
     positioningId: z
       .string()
       .optional()

@@ -30,6 +30,28 @@ import type { JsonApiResponse, JsonApiResource } from "../types.js";
 
 const POSITIONING_INCLUDE = "candidate,resource,project,opportunity";
 
+const POSITIONING_PRICING_KEYS = [
+  "averageDailyPriceExcludingTax",
+  "averageDailyCost",
+  "numberOfDaysInvoicedOrQuantity",
+  "numberOfDaysFree",
+] as const;
+
+function fmtMoney(v: unknown): string {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString("fr-FR") : "?";
+}
+
+/** Ligne de synthèse tarifaire d'un positionnement (prix, coût, jours, CA + marge simulés). */
+function formatPricingSummary(entity: { attributes?: Record<string, unknown> } | undefined): string {
+  const a = (entity?.attributes ?? {}) as Record<string, unknown>;
+  return (
+    `💶 Prix TJM HT: ${fmtMoney(a["averageDailyPriceExcludingTax"])} · Coût/j: ${fmtMoney(a["averageDailyCost"])} · ` +
+    `Jours: ${fmtMoney(a["numberOfDaysInvoicedOrQuantity"])} · CA simulé HT: ${fmtMoney(a["turnoverSimulatedExcludingTax"])} · ` +
+    `Marge simulée HT: ${fmtMoney(a["marginSimulatedExcludingTax"])}`
+  );
+}
+
 function asAttrs(r: JsonApiResource): Record<string, unknown> {
   return (r.attributes ?? {}) as Record<string, unknown>;
 }
@@ -583,7 +605,9 @@ L'API BoondManager exige DEUX relations :
   - la cible → fournir opportunityId OU projectId.
 Le serveur construit \`dependsOn\` automatiquement (candidateId → type candidate, resourceId → type resource). Sans consultant ou sans cible, l'appel est refusé côté serveur avec un message clair (l'API renvoie sinon « Missing required attribute: dependsOn »).
 
-Attributs optionnels : state (entier dictionnaire setting.state.positioning), startDate/endDate (YYYY-MM-DD), note (→ informationComments).`,
+Attributs optionnels : state (entier dictionnaire setting.state.positioning), startDate/endDate (YYYY-MM-DD), note (→ informationComments).
+
+Tarification (optionnelle) : averageDailyPriceExcludingTax (TJM vente HT), averageDailyCost (coût/j — à ne fournir que pour forcer ; sinon le coût issu du contrat est conservé), numberOfDaysInvoicedOrQuantity, numberOfDaysFree. Après écriture, le prix, le coût et la marge simulée sont renvoyés.`,
       inputSchema: PositioningCreateSchema,
       annotations: {
         readOnlyHint: false,
@@ -632,11 +656,13 @@ Attributs optionnels : state (entier dictionnaire setting.state.positioning), st
 
       const response = await apiRequest("/positionings", "POST", body);
       const entity = Array.isArray(response.data) ? response.data[0] : response.data;
+      const hasPricing = POSITIONING_PRICING_KEYS.some((k) => (params as Record<string, unknown>)[k] !== undefined);
+      const pricingLine = hasPricing ? `${formatPricingSummary(entity)}\n\n` : "";
       return {
         content: [
           {
             type: "text" as const,
-            text: `✅ Positionnement créé avec succès.\nID: ${entity?.id}\n\n${formatDetailResponse(response)}`,
+            text: `✅ Positionnement créé avec succès.\nID: ${entity?.id}\n${pricingLine}${formatDetailResponse(response)}`,
           },
         ],
       };
@@ -648,9 +674,11 @@ Attributs optionnels : state (entier dictionnaire setting.state.positioning), st
     "boond_positionings_update",
     {
       title: "Modifier un positionnement",
-      description: `Met à jour un positionnement existant (état, période, commentaires). Seuls les champs fournis sont modifiés.
+      description: `Met à jour un positionnement existant (état, période, commentaires, tarification). Seuls les champs fournis sont modifiés.
 
-Args : id (requis), state (entier dictionnaire setting.state.positioning), startDate/endDate (YYYY-MM-DD), note (→ informationComments). Pour changer le consultant ou la cible, supprimer puis recréer.`,
+Args : id (requis), state (entier dictionnaire setting.state.positioning), startDate/endDate (YYYY-MM-DD), note (→ informationComments). Pour changer le consultant ou la cible, supprimer puis recréer.
+
+Tarification (optionnelle) : averageDailyPriceExcludingTax (TJM vente HT), averageDailyCost (coût/j — à ne fournir que pour forcer ; sinon le coût issu du contrat est conservé), numberOfDaysInvoicedOrQuantity, numberOfDaysFree. Après écriture, le positionnement est relu et le prix, le coût et la marge simulée sont renvoyés.`,
       inputSchema: PositioningUpdateSchema,
       annotations: {
         readOnlyHint: false,
@@ -666,8 +694,18 @@ Args : id (requis), state (entier dictionnaire setting.state.positioning), start
       const body = buildJsonApiBody("positioning", attrs, id);
       const response = await apiRequest(`/positionings/${id}`, "PUT", body);
       const summary = await formatPositioningsList(response);
+
+      // Si la tarification a changé, relire le positionnement pour renvoyer les
+      // valeurs recalculées (CA / marge simulés) faisant autorité.
+      const hasPricing = POSITIONING_PRICING_KEYS.some((k) => (rest as Record<string, unknown>)[k] !== undefined);
+      let pricingLine = "";
+      if (hasPricing) {
+        const fresh = await apiRequest(`/positionings/${id}`, "GET", undefined, { include: POSITIONING_INCLUDE });
+        const entity = Array.isArray(fresh.data) ? fresh.data[0] : fresh.data;
+        pricingLine = `\n${formatPricingSummary(entity)}`;
+      }
       return {
-        content: [{ type: "text" as const, text: `✅ Positionnement #${id} mis à jour.\n${summary}` }],
+        content: [{ type: "text" as const, text: `✅ Positionnement #${id} mis à jour.\n${summary}${pricingLine}` }],
       };
     }
   );

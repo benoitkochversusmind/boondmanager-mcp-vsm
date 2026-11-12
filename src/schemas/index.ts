@@ -971,6 +971,14 @@ export const ActionCreateSchema = z
     companyId: z.string().optional().describe("ID de la société liée."),
     opportunityId: z.string().optional().describe("ID de l'opportunité liée."),
     projectId: z.string().optional().describe("ID du projet lié."),
+    positioningId: z
+      .string()
+      .optional()
+      .describe(
+        "ID du positionnement lié → relation `positioning` (en plus de `dependsOn`). " +
+          "Certains types d'action l'EXIGENT (ex: type 10 « Réunion de qualification technique (Klif) », " +
+          "type 8 « Présentation Client ») : sans lui l'API renvoie 422 (1002, /data/relationships/positioning)."
+      ),
     mainManagerId: z
       .string()
       .optional()
@@ -980,6 +988,33 @@ export const ActionCreateSchema = z
       ),
   })
   .strict();
+
+// Modification d'une action : mêmes attributs/relations que la création, tous
+// optionnels, + `id` requis. Seuls les champs fournis sont transmis.
+export const ActionUpdateSchema = z
+  .object({
+    id: z.string().min(1).describe("ID de l'action à modifier."),
+    typeOf: z
+      .union([z.number().int(), z.string().regex(/^\d+$/)])
+      .optional()
+      .describe("Nouveau type d'action (ID numérique du dictionnaire setting.action.<entity>)."),
+    title: z.string().optional().describe("Titre de l'action (attribut `title` BoondManager)."),
+    text: z.string().optional().describe("Contenu / description HTML de l'action (attribut `text`)."),
+    startDate: z
+      .string()
+      .optional()
+      .describe("Date / horaire de début. `YYYY-MM-DD` (minuit Europe/Paris) ou ISO 8601 complet."),
+    endDate: z.string().optional().describe("Date / horaire de fin (même formats que `startDate`)."),
+    positioningId: z
+      .string()
+      .optional()
+      .describe(
+        "ID du positionnement à rattacher → relation `positioning` (utile pour corriger une action a posteriori)."
+      ),
+    mainManagerId: z.string().optional().describe("ID de la ressource responsable (relation `mainManager`)."),
+  })
+  .strict();
+export type ActionUpdateInput = z.infer<typeof ActionUpdateSchema>;
 
 // ---- Resource missions history (composite) ----
 
@@ -1448,6 +1483,29 @@ export const ProductUpdateSchema = z
 
 // ---- Positioning schemas ----
 
+// Tarification d'un positionnement (noms d'attributs API exacts, vérifiés sur un
+// GET /positionings/{id}). Partagés par create + update. Omis ⇒ non transmis
+// (donc un coût calculé automatiquement depuis le contrat de travail n'est PAS
+// écrasé tant que `averageDailyCost` n'est pas fourni explicitement).
+const positioningPricingFields = {
+  averageDailyPriceExcludingTax: z
+    .number()
+    .optional()
+    .describe("TJM de vente HT (prix). Attribut API `averageDailyPriceExcludingTax`."),
+  averageDailyCost: z
+    .number()
+    .optional()
+    .describe(
+      "Coût journalier. Attribut API `averageDailyCost`. ⚠️ Ne le fournir que pour forcer : s'il est omis, " +
+        "le coût calculé depuis le contrat de travail de la ressource est conservé."
+    ),
+  numberOfDaysInvoicedOrQuantity: z
+    .number()
+    .optional()
+    .describe("Nombre de jours facturés / quantité. Attribut API `numberOfDaysInvoicedOrQuantity`."),
+  numberOfDaysFree: z.number().optional().describe("Nombre de jours offerts. Attribut API `numberOfDaysFree`."),
+} as const;
+
 export const PositioningCreateSchema = z
   .object({
     candidateId: z
@@ -1472,6 +1530,7 @@ export const PositioningCreateSchema = z
     startDate: z.string().optional().describe("Date de début (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Date de fin (YYYY-MM-DD)"),
     note: z.string().optional().describe("Commentaires (mappé sur l'attribut informationComments de l'API)"),
+    ...positioningPricingFields,
   })
   .strict();
 
@@ -1482,6 +1541,7 @@ export const PositioningUpdateSchema = z
     startDate: z.string().optional().describe("Date de début (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Date de fin (YYYY-MM-DD)"),
     note: z.string().optional().describe("Commentaires (mappé sur l'attribut informationComments de l'API)"),
+    ...positioningPricingFields,
   })
   .strict();
 export type PositioningUpdateInput = z.infer<typeof PositioningUpdateSchema>;

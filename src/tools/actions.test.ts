@@ -9,6 +9,7 @@ import {
   mergeActionDictionary,
   resetActionTypeLabelsForTests,
   handleActionCreate,
+  handleActionUpdate,
   resolveCurrentUserResourceId,
   type ActionFormatContext,
 } from "./actions.js";
@@ -43,9 +44,9 @@ describe("registerActionTools", () => {
     resetActionTypeLabelsForTests();
   });
 
-  it("should register 4 action tools", () => {
+  it("should register 5 action tools", () => {
     registerActionTools(server);
-    expect(server.registerTool).toHaveBeenCalledTimes(4);
+    expect(server.registerTool).toHaveBeenCalledTimes(5);
   });
 
   it("should register all expected tool names", () => {
@@ -54,7 +55,15 @@ describe("registerActionTools", () => {
     expect(names).toContain("boond_actions_search");
     expect(names).toContain("boond_actions_get");
     expect(names).toContain("boond_actions_create");
+    expect(names).toContain("boond_actions_update");
     expect(names).toContain("boond_actions_delete");
+  });
+
+  it("registers update as non-destructive + idempotent", () => {
+    registerActionTools(server);
+    const call = vi.mocked(server.registerTool).mock.calls.find((c) => c[0] === "boond_actions_update");
+    expect(call?.[1].annotations?.destructiveHint).toBe(false);
+    expect(call?.[1].annotations?.idempotentHint).toBe(true);
   });
 
   it("should register search and get as readOnly", () => {
@@ -691,6 +700,79 @@ describe("handleActionCreate — dependsOn + mainManager (Bug fix)", () => {
       return { data: {} } as never;
     });
     await expect(handleActionCreate({ typeOf: 3, contactId: "514" })).rejects.toThrow(/mainManagerId|current/i);
+  });
+});
+
+describe("handleActionCreate — positioning relationship (Évolution 1)", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  const CURRENT_USER_RESP = {
+    data: { id: "1", type: "currentuser", attributes: { thumbnail: "resource_42_abc" } },
+  };
+
+  it("adds relationships.positioning from positioningId (alongside dependsOn)", async () => {
+    const captured: { body?: unknown } = {};
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, _m, body) => {
+      if (path === "/application/current-user") return CURRENT_USER_RESP as never;
+      captured.body = body;
+      return { data: { id: "999", type: "action", attributes: {}, relationships: {} } } as never;
+    });
+    await handleActionCreate({ typeOf: 10, contactId: "19692", positioningId: "16807" });
+    const body = captured.body as { data: { relationships: Record<string, { data: unknown }> } };
+    expect(body.data.relationships.positioning.data).toEqual({ id: "16807", type: "positioning" });
+    expect(body.data.relationships.dependsOn.data).toEqual({ id: "19692", type: "contact" });
+  });
+
+  it("on 1002 positioning error without positioningId, throws a clear message listing positionings", async () => {
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, method) => {
+      if (path === "/application/current-user") return CURRENT_USER_RESP as never;
+      if (path === "/actions" && method === "POST") {
+        throw new Error(
+          "BoondManager API 422 Unprocessable Entity: 1002 - Wrong or missing attribute (parameter: /data/relationships/positioning)"
+        );
+      }
+      if (path === "/positionings") {
+        return { data: [{ id: "16807", type: "positioning", attributes: { state: 8 } }] } as never;
+      }
+      return { data: {} } as never;
+    });
+    await expect(handleActionCreate({ typeOf: 10, contactId: "19692" })).rejects.toThrow(
+      /positioningId[\s\S]*positioning #16807/
+    );
+  });
+});
+
+describe("handleActionUpdate (Évolution 1 + 3)", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("PUT /actions/{id} with positioning relationship + endDate attribute", async () => {
+    const captured: { path?: string; method?: string; body?: unknown } = {};
+    vi.spyOn(boondClient, "apiRequest").mockImplementation(async (path, method, body) => {
+      captured.path = path;
+      captured.method = method;
+      captured.body = body;
+      return { data: { id: "216050", type: "action", attributes: {}, relationships: {} } } as never;
+    });
+    await handleActionUpdate({
+      id: "216050",
+      positioningId: "16807",
+      startDate: "2026-11-12T10:00:00+0100",
+      endDate: "2026-11-12T13:00:00+0100",
+    });
+    expect(captured.path).toBe("/actions/216050");
+    expect(captured.method).toBe("PUT");
+    const body = captured.body as {
+      data: { id: string; attributes: Record<string, unknown>; relationships: Record<string, { data: unknown }> };
+    };
+    expect(body.data.id).toBe("216050");
+    expect(body.data.attributes.endDate).toBe("2026-11-12T13:00:00+0100");
+    expect(body.data.relationships.positioning.data).toEqual({ id: "16807", type: "positioning" });
+  });
+
+  it("rejects when no field is provided (only id)", async () => {
+    const api = vi.spyOn(boondClient, "apiRequest").mockResolvedValue({ data: {} } as never);
+    await expect(handleActionUpdate({ id: "216050" })).rejects.toThrow(/[Rr]ien à modifier|au moins un champ/);
+    expect(api).not.toHaveBeenCalled();
   });
 });
 

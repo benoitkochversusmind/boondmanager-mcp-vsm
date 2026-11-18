@@ -755,7 +755,14 @@ export const ContactCreateSchema = z
     phone1: z.string().optional().describe("Téléphone"),
     city: z.string().optional().describe("Ville"),
     country: z.string().optional().describe("Pays"),
-    title: z.string().optional().describe("Titre / fonction"),
+    function: z
+      .string()
+      .optional()
+      .describe("Fonction / poste du contact (attribut API `function` — c'est le champ « Fonction » du CRM)."),
+    title: z
+      .string()
+      .optional()
+      .describe("Alias rétro-compatible de `function` (mappé sur l'attribut API `function`)."),
     companyId: z.string().optional().describe("ID de la société associée"),
     note: z.string().optional().describe("Notes"),
   })
@@ -770,7 +777,14 @@ export const ContactUpdateSchema = z
     email1: z.string().email().optional().describe("Email"),
     phone1: z.string().optional().describe("Téléphone"),
     city: z.string().optional().describe("Ville"),
-    title: z.string().optional().describe("Titre / fonction"),
+    function: z
+      .string()
+      .optional()
+      .describe("Fonction / poste du contact (attribut API `function` — c'est le champ « Fonction » du CRM)."),
+    title: z
+      .string()
+      .optional()
+      .describe("Alias rétro-compatible de `function` (mappé sur l'attribut API `function`)."),
     note: z.string().optional().describe("Notes"),
   })
   .strict();

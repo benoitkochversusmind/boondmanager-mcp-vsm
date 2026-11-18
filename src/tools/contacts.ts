@@ -119,6 +119,17 @@ Pagination : \`page\`, \`pageSize\` (max 500). Tri : \`sort\` + \`order\`.
 
 Returns : liste paginée des contacts. Utiliser \`boond_contacts_get\` ou les outils d'onglets pour le détail.`;
 
+// La « Fonction » d'un contact BoondManager est l'attribut API `function` ; il
+// n'existe PAS d'attribut `title` sur un contact (vérifié live sur GET
+// /contacts/{id}). L'ancien champ `title` était donc silencieusement ignoré par
+// l'API. On mappe `title` (legacy) → `function` et on retire `title` du corps.
+function normalizeContactFunction(attrs: Record<string, unknown>): void {
+  if (attrs.function === undefined && attrs.title !== undefined) {
+    attrs.function = attrs.title;
+  }
+  delete attrs.title;
+}
+
 export function registerContactTools(server: McpServer): void {
   registerSearchTool(server, OPTS, {
     schema: ContactSearchSchema,
@@ -128,6 +139,7 @@ export function registerContactTools(server: McpServer): void {
 
   registerCreateTool(server, OPTS, ContactCreateSchema, (params) => {
     const { companyId, ...attrs } = params;
+    normalizeContactFunction(attrs);
     const body = buildJsonApiBody("contact", attrs);
     if (companyId) {
       (body as Record<string, Record<string, unknown>>).data.relationships = {
@@ -143,6 +155,7 @@ export function registerContactTools(server: McpServer): void {
     ContactUpdateSchema,
     async (params) => {
       const { id, mainManager, agency, pole, ...attrs } = params;
+      normalizeContactFunction(attrs);
       const { relationships, rejected } = await resolveOrgRelationships({
         mainManager: mainManager as string | undefined,
         agency: agency as string | undefined,

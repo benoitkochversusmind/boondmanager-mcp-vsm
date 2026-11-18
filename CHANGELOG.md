@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.27.2] - 2026-11-18
+
+### Corrigé
+
+- **Champ « Fonction » d'un contact enfin modifiable** — la « Fonction » d'un contact BoondManager est l'attribut API **`function`**, or le schéma n'exposait qu'un champ `title` qui ne correspond à **aucun attribut de contact** (vérifié sur `GET /contacts/{id}` : pas de `title`, mais bien `function`) → la valeur était silencieusement ignorée par l'API. `boond_contacts_create` et `boond_contacts_update` exposent désormais **`function`** (envoyé tel quel, via `PUT /contacts/{id}/information` pour l'update). L'ancien champ `title` est conservé comme **alias rétro-compatible** mappé sur `function` (le `function` explicite l'emporte), et le `title` erroné n'est plus envoyé. 4 tests ajoutés. Suite à 719 tests.
+
 ## [1.27.1] - 2026-11-12
 
 ### Corrigé (documentation, suite à la recette live de 1.27.0)

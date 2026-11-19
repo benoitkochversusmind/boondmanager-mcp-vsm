@@ -11,6 +11,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - **Prérequis d'exploitation** : un secret de signature stable `OAUTH_REFRESH_SIGNING_SECRET` (secret du Container App). À défaut, repli sur `OAUTH_CLIENT_SECRET`, sinon secret éphémère (ne survit pas au redémarrage, avertissement au démarrage).
   - **Révocation** : pas de denylist par jeton (stateless) ; couper un accès = rotation du secret de signature (invalide tous les refresh tokens) ou retrait du token Boond de l'utilisateur en Key Vault. Implémentation isolée et testée dans `src/auth/refresh.ts` (7 tests).
 
+### Sécurité
+
+- **Rate limiting des endpoints OAuth** — `/oauth/token`, `/oauth/authorize`, `/oauth/callback` sont désormais limités (100 req / 15 min / IP via `express-rate-limit`) pour freiner le brute-force / credential-stuffing sur la couche d'auth. La route authentifiée `/mcp` (fort trafic) n'est pas limitée. Corrige l'alerte CodeQL « Missing rate limiting ».
+
 ## [1.27.2] - 2026-11-18
 
 ### Corrigé

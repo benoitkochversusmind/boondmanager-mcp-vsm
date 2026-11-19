@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { createHash, randomBytes } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -345,6 +346,19 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// Rate-limit the unauthenticated OAuth endpoints (code exchange, refresh token
+// verification, authorize/callback) to blunt brute-force / credential-stuffing
+// against the auth layer. The high-traffic authenticated /mcp route is NOT
+// limited here. 100 requests / 15 min / IP is ample for a well-behaved client
+// (which refreshes every few hours).
+const oauthLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(["/oauth/token", "/oauth/authorize", "/oauth/callback"], oauthLimiter);
 
 app.get("/health", (_req, res) => {
   const users = Array.from(_users.values()).map((u) => ({ email: u.email, jwtReady: !!u.cachedJwt }));

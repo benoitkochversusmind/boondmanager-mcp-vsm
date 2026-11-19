@@ -485,6 +485,14 @@ auth + per-user JWT injection. VSM-only ops considerations :
   activate --revision <previous>`. Always keep the previous healthy
   revision visible in `az containerapp revision list` for quick
   rollback.
+- **`OAUTH_REFRESH_SIGNING_SECRET` is required for persistent auth** (since
+  1.28.0). The wrapper issues OAuth refresh tokens as stateless signed JWTs
+  (`src/auth/refresh.ts`); the HMAC secret must be stable across restarts or
+  every restart invalidates all refresh tokens (users re-login). Set it as a
+  Container App secret + env var: `az containerapp secret set -n ca-boondmcp-vsm
+  -g rg-corp-ai-shared-prod-001 --secrets oauth-refresh-key=<64-hex>` then
+  `az containerapp update ... --set-env-vars OAUTH_REFRESH_SIGNING_SECRET=secretref:oauth-refresh-key`.
+  Rotating this secret revokes every refresh token (emergency cut-off).
 - **Diagnostic logs** — console output goes to a Log Analytics workspace
   pointed at by the env `properties.appLogsConfiguration`. Use
   `az monitor log-analytics query --workspace <id> --analytics-query

@@ -1,10 +1,12 @@
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { createHash, randomBytes } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { requestContext } from "./auth/context.js";
 import { getBoondJwtForUser } from "./auth/keyvault.js";
+import { issueRefreshToken, verifyRefreshToken } from "./auth/refresh.js";
 import { registerCandidateTools } from "./tools/candidates.js";
 import {
   registerCandidateTechnicalDataTools,
@@ -345,6 +347,19 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+// Rate-limit the unauthenticated OAuth endpoints (code exchange, refresh token
+// verification, authorize/callback) to blunt brute-force / credential-stuffing
+// against the auth layer. The high-traffic authenticated /mcp route is NOT
+// limited here. 100 requests / 15 min / IP is ample for a well-behaved client
+// (which refreshes every few hours).
+const oauthLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(["/oauth/token", "/oauth/authorize", "/oauth/callback"], oauthLimiter);
+
 app.get("/health", (_req, res) => {
   const users = Array.from(_users.values()).map((u) => ({ email: u.email, jwtReady: !!u.cachedJwt }));
   res.json({ status: "ok", version: "1.0.0-vsm", users, oauthSessions: oauthSessions.size });
@@ -357,9 +372,9 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
     authorization_endpoint: `${MCP_BASE_URL}/oauth/authorize`,
     token_endpoint: `${MCP_BASE_URL}/oauth/token`,
     response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
-    scopes_supported: ["openid", "email", "profile"],
+    scopes_supported: ["openid", "email", "profile", "offline_access"],
   });
 });
 
@@ -375,7 +390,7 @@ app.get(["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-
   res.json({
     resource: MCP_BASE_URL,
     authorization_servers: [MCP_BASE_URL],
-    scopes_supported: ["openid", "email", "profile"],
+    scopes_supported: ["openid", "email", "profile", "offline_access"],
     bearer_methods_supported: ["header"],
   });
 });
@@ -572,6 +587,40 @@ app.post("/oauth/token", async (req, res) => {
     return;
   }
 
+  // refresh_token: silently re-issue a short access session from a long-lived,
+  // stateless signed refresh token — no interactive login. This is what stops
+  // the "reconnect every morning" (8h access token with no refresh) AND the
+  // "reconnect after every deploy" (in-memory sessions wiped): the refresh token
+  // survives restarts because it is self-contained.
+  if (grant_type === "refresh_token") {
+    const { refresh_token } = req.body as Record<string, string>;
+    const email = verifyRefreshToken(refresh_token);
+    if (!email) {
+      res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired refresh token" });
+      return;
+    }
+    let boondJwt: string;
+    try {
+      boondJwt = await getBoondJwtForUser(email);
+    } catch {
+      res.status(503).json({ error: "temporarily_unavailable" });
+      return;
+    }
+    const accessToken = `oauth-${randomBytes(32).toString("hex")}`;
+    const expiresIn = 8 * 3600;
+    oauthSessions.set(accessToken, { email, boondJwt, expiresAt: Date.now() + expiresIn * 1000 });
+    const rotatedRefresh = issueRefreshToken(email); // rotate on every use
+    console.log("[OAUTH] Access token refreshed for:", email);
+    res.json({
+      access_token: accessToken,
+      token_type: "Bearer",
+      expires_in: expiresIn,
+      refresh_token: rotatedRefresh,
+      scope: "openid email offline_access",
+    });
+    return;
+  }
+
   if (grant_type !== "authorization_code") {
     res.status(400).json({ error: "unsupported_grant_type" });
     return;
@@ -612,8 +661,15 @@ app.post("/oauth/token", async (req, res) => {
     expiresAt: Date.now() + expiresIn * 1000,
   });
 
+  const refreshToken = issueRefreshToken(authCode.email);
   console.log("[OAUTH] Session created for:", authCode.email);
-  res.json({ access_token: accessToken, token_type: "Bearer", expires_in: expiresIn, scope: "openid email" });
+  res.json({
+    access_token: accessToken,
+    token_type: "Bearer",
+    expires_in: expiresIn,
+    refresh_token: refreshToken,
+    scope: "openid email offline_access",
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.28.0] - 2026-11-19
+
+### Ajouté
+
+- **Persistance de l'authentification — refresh tokens OAuth** — fin des reconnexions quotidiennes. Le wrapper OAuth n'émettait qu'un jeton d'accès de 8 h **sans refresh token** (`grant_types_supported: ["authorization_code"]`), donc Claude.ai devait refaire tout le login dès l'expiration (~chaque matin), et chaque redéploiement effaçait les sessions en mémoire. Désormais `/oauth/token` renvoie aussi un **`refresh_token`** (JWT signé HS256, **stateless**, TTL **30 jours**, `jti` unique) et gère le `grant_type=refresh_token` : il re-récupère le JWT Boond de l'utilisateur, crée une nouvelle session d'accès et **fait tourner le refresh token**. Métadonnées OAuth mises à jour (`grant_types_supported: ["authorization_code", "refresh_token"]`, scope `offline_access`). Comme le refresh token est auto-porteur, il **survit aux redémarrages et aux déploiements** : Claude.ai rafraîchit en silence, sans re-SSO — ni le matin, ni après un déploiement.
+  - **Prérequis d'exploitation** : un secret de signature stable `OAUTH_REFRESH_SIGNING_SECRET` (secret du Container App). À défaut, repli sur `OAUTH_CLIENT_SECRET`, sinon secret éphémère (ne survit pas au redémarrage, avertissement au démarrage).
+  - **Révocation** : pas de denylist par jeton (stateless) ; couper un accès = rotation du secret de signature (invalide tous les refresh tokens) ou retrait du token Boond de l'utilisateur en Key Vault. Implémentation isolée et testée dans `src/auth/refresh.ts` (7 tests).
+
 ## [1.27.2] - 2026-11-18
 
 ### Corrigé

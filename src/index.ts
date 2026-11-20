@@ -244,6 +244,11 @@ async function resolveUser(
 // EXPRESS APP
 // ─────────────────────────────────────────────────────────────────────────────
 const app = express();
+// Behind the Azure Container Apps ingress (one proxy hop): trust X-Forwarded-For
+// so req.ip is the real client IP. Without this, express-rate-limit keys EVERY
+// request to the proxy IP — i.e. all users share a single bucket (and v8 warns
+// about the unexpected X-Forwarded-For). Required for per-client OAuth rate limits.
+app.set("trust proxy", 1);
 app.use(cors({ origin: "*", methods: ["GET", "POST", "DELETE", "OPTIONS"] }));
 
 // ── Out-of-band document upload (large attachments) ──────────────────────────

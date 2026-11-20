@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.28.1] - 2026-11-20
+
+### Corrigé
+
+- **Rate limiter OAuth derrière le proxy ACA** — ajout de `app.set("trust proxy", 1)`. Sans cela, `express-rate-limit` keyait toutes les requêtes sur l'IP du proxy ingress (un seul compteur partagé entre **tous** les utilisateurs, risque de 429 en cas d'affluence, + avertissement v8 sur le `X-Forwarded-For`). Désormais `req.ip` = vraie IP client → quota par utilisateur. (Les refresh tokens 1.28.0 fonctionnent bien — rafraîchissements silencieux confirmés en prod.)
+
 ## [1.28.0] - 2026-11-19
 
 ### Ajouté
